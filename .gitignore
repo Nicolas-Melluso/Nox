@@ -1,1 +1,4 @@
 .agents
+nox_agent/src/nox_agent.egg-info
+nox_agent/build
+nox_agent/dist
