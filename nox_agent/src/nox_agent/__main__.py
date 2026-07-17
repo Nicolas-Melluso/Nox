@@ -13,6 +13,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         "--v",
+        "-version",
+        "-v",
         action="version",
         version=f"Nox {__version__}",
         help="Muestra la versión instalada y termina.",
