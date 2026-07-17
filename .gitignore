@@ -1,4 +1,5 @@
-.agents
-nox_agent/src/nox_agent.egg-info
-nox_agent/build
-nox_agent/dist
+/.agents/
+/nox_agent/.venv/
+/nox_agent/build/
+/nox_agent/dist/
+/nox_agent/src/*.egg-info/
