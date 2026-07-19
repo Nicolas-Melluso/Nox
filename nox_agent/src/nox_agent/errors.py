@@ -66,6 +66,22 @@ class ErrorCode(StrEnum):
         "EN0178012",
         "Nox no pudo actualizar el registro global de proyectos.",
     )
+    CONFIG_INVALID = (
+        "EN0178013",
+        "La configuración de Nox no es válida.",
+    )
+    CONFIG_VALUE_INVALID = (
+        "EN0178014",
+        "El valor indicado para la configuración no es válido.",
+    )
+    LOCAL_PROJECT_REQUIRED = (
+        "EN0178015",
+        "La configuración local requiere un proyecto Nox.",
+    )
+    INTERACTIVE_TERMINAL_REQUIRED = (
+        "EN0178016",
+        "El menú interactivo requiere una terminal compatible.",
+    )
 
 
 class NoxError(Exception):
@@ -82,6 +98,13 @@ class NoxError(Exception):
         if self.detail:
             lines.append(f"Detalle: {self.detail}")
         return "\n".join(lines)
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "code": str(self.code),
+            "message": self.message,
+            "detail": self.detail,
+        }
 
 
 class NoxErrorFactory:

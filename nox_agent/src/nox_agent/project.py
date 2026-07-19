@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from nox_agent.errors import ErrorCode, NoxErrorFactory
-from nox_agent.tools import Validator
+from nox_agent.tools import FileManager, Validator
 
 NOX_DIRECTORY_NAME = ".nox"
 MANIFEST_FILENAME = "project.toml"
@@ -76,7 +76,7 @@ def initialize_project(root: Path, *, nox_version: str) -> InitResult:
 
     try:
         nox_directory.mkdir()
-        _atomic_write_text(
+        FileManager.atomic_write_text(
             nox_directory / MANIFEST_FILENAME,
             _render_manifest(manifest),
         )
@@ -141,6 +141,21 @@ def find_nearest_parent(root: Path) -> ProjectContext | None:
     if parent_root is None:
         return None
     return validate_project(parent_root)
+
+
+def find_active_project(start: Path) -> ProjectContext | None:
+    """Encuentra el proyecto Nox más cercano desde una ubicación."""
+
+    current = start.resolve()
+    if current.is_file():
+        current = current.parent
+
+    while True:
+        if (current / NOX_DIRECTORY_NAME).exists():
+            return validate_project(current)
+        if current.parent == current:
+            return None
+        current = current.parent
 
 
 def load_manifest(root: Path) -> ProjectManifest:
@@ -239,7 +254,7 @@ def ensure_gitignore(root: Path) -> str:
     gitignore_path = root / GITIGNORE_FILENAME
     if not gitignore_path.exists():
         try:
-            _atomic_write_text(gitignore_path, f"{GITIGNORE_ENTRY}\n")
+            FileManager.atomic_write_text(gitignore_path, f"{GITIGNORE_ENTRY}\n")
         except OSError as error:
             raise NoxErrorFactory.create(
                 ErrorCode.FILESYSTEM_ERROR,
@@ -275,7 +290,7 @@ def ensure_gitignore(root: Path) -> str:
     prefix = "" if not content or content.endswith(("\n", "\r")) else newline
     updated_content = f"{content}{prefix}{GITIGNORE_ENTRY}{newline}"
     try:
-        _atomic_write_text(gitignore_path, updated_content)
+        FileManager.atomic_write_text(gitignore_path, updated_content)
     except OSError as error:
         raise NoxErrorFactory.create(
             ErrorCode.FILESYSTEM_ERROR,
@@ -369,14 +384,4 @@ def _find_nox_ancestor(root: Path) -> Path | None:
         if current.parent == current:
             return None
         current = current.parent
-
-
-def _atomic_write_text(path: Path, content: str) -> None:
-    temporary_path = path.with_name(f".{path.name}.nox.tmp")
-    try:
-        temporary_path.write_text(content, encoding="utf-8", newline="")
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
 

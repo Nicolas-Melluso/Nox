@@ -9,6 +9,7 @@ from pathlib import Path
 
 from nox_agent.errors import ErrorCode, NoxErrorFactory
 from nox_agent.project import ProjectContext
+from nox_agent.tools import FileManager
 
 REGISTRY_SCHEMA_VERSION = 1
 
@@ -120,20 +121,14 @@ def registry_path() -> Path:
 
 def _write_registry(registry: dict[str, object]) -> None:
     path = registry_path()
-    temporary_path = path.with_name(f".{path.name}.nox.tmp")
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path.write_text(
+        FileManager.atomic_write_text(
+            path,
             json.dumps(registry, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="",
+            create_parents=True,
         )
-        os.replace(temporary_path, path)
     except OSError as error:
         raise NoxErrorFactory.create(
             ErrorCode.REGISTRY_WRITE_FAILED,
             detail=str(error),
         ) from error
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
