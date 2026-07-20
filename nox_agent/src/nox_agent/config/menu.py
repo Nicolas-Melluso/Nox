@@ -8,6 +8,7 @@ from nox_agent.config.catalog import (
     ConfigurationCatalog,
 )
 from nox_agent.config.manager import ConfigurationManager
+from nox_agent.config.model_menu import ModelConfigurationMenu
 from nox_agent.logs import LogLevel, NoxLogs
 from nox_agent.tools import ConsoleMenu, MenuItem
 
@@ -46,6 +47,8 @@ class ConfigurationMenu:
                 return
             if selected.value == "logs":
                 self._logs_menu()
+            elif selected.value == "models":
+                ModelConfigurationMenu(self.manager, self.menu).run()
             elif selected.value == "actual":
                 self._show_actual()
 

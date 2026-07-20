@@ -14,6 +14,7 @@ from nox_agent.errors import ErrorCode, NoxError, NoxErrorFactory
 from nox_agent.logs import LogLevel, NoxLogs
 from nox_agent.project import InitResult, initialize_project
 from nox_agent.registry import context_role, register_context
+from nox_agent.runtime import ReplSession, StatusService
 
 logger = NoxLogs.get_logger("cli")
 
@@ -34,11 +35,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Devuelve una respuesta estructurada para automatizaciones.",
     )
+    parser.add_argument(
+        "--status",
+        dest="show_status",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     subparsers = parser.add_subparsers(dest="command")
     subparsers.add_parser(
         "init",
         help="Inicializa Nox en el directorio actual.",
         description="Crea y valida la configuración local de Nox.",
+    )
+    subparsers.add_parser(
+        "start",
+        help="Inicia una sesión conversacional con Nox.",
+        description="Abre el REPL de Nox dentro del proyecto actual.",
     )
     configure_config_parser(subparsers)
     return parser
@@ -55,6 +67,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"Nox {__version__}")
         return 0
+    if arguments.show_status:
+        try:
+            _print_status()
+        except NoxError as error:
+            _print_json("status", None, error=error)
+            return 1
+        except Exception as error:
+            critical = NoxErrorFactory.create(
+                ErrorCode.UNKNOWN_CRITICAL,
+                detail=f"{type(error).__name__}: {error}",
+            )
+            _print_json("status", None, error=critical)
+            return 2
+        return 0
     if arguments.command is None:
         parser.print_help()
         return 0
@@ -69,6 +95,13 @@ def main(argv: list[str] | None = None) -> int:
                 start=Path.cwd(),
                 emit_json=_print_json,
             )
+        if arguments.command == "start":
+            if arguments.json:
+                raise NoxErrorFactory.create(
+                    ErrorCode.CONFIG_INVALID,
+                    detail="nox start es interactivo y no admite --json.",
+                )
+            return ReplSession(Path.cwd(), nox_version=__version__).run()
     except NoxError as error:
         if arguments.json:
             _print_json(_command_identifier(arguments), None, error=error)
@@ -104,6 +137,11 @@ def _run_init(*, output_json: bool) -> int:
 def _configure_effective_logs(start: Path) -> None:
     configuration = ConfigurationManager(start).effective()
     NoxLogs.configure(LogLevel(configuration.values["logs.level"].value))
+
+
+def _print_status() -> None:
+    status = StatusService.collect(Path.cwd(), nox_version=__version__)
+    _print_json("status", status)
 
 
 def _init_result_as_dict(result: InitResult, *, role: str) -> dict[str, object]:

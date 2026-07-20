@@ -74,6 +74,36 @@ class ConsoleMenu:
         while self._read_key() not in {"enter", "escape"}:
             pass
 
+    def input_text(
+        self,
+        title: str,
+        label: str,
+        *,
+        current: str = "",
+    ) -> str | None:
+        """Captura una línea editable; Escape cancela sin guardar."""
+
+        if not sys.stdin.isatty() or not self.stream.isatty():
+            raise NoxErrorFactory.create(
+                ErrorCode.INTERACTIVE_TERMINAL_REQUIRED,
+                detail="Usá la forma directa del comando para automatizaciones.",
+            )
+        buffer = list(current)
+        while True:
+            self._render_input(title, label, "".join(buffer))
+            key = msvcrt.getwch()
+            if key in {"\x00", "\xe0"}:
+                msvcrt.getwch()
+                continue
+            if key == "\x1b":
+                return None
+            if key == "\r":
+                return "".join(buffer).strip()
+            if key == "\b" and buffer:
+                buffer.pop()
+            elif key.isprintable():
+                buffer.append(key)
+
     def clear(self) -> None:
         self.stream.write(CLEAR_SCREEN)
         self.stream.flush()
@@ -95,6 +125,12 @@ class ConsoleMenu:
             annotation = f"  [{item.annotation}]" if item.annotation else ""
             self.stream.write(f"{marker} {item.label}{annotation}\n")
         self.stream.write("\n↑/↓ navegar · Enter seleccionar · Escape volver")
+        self.stream.flush()
+
+    def _render_input(self, title: str, label: str, value: str) -> None:
+        self.stream.write(CLEAR_SCREEN)
+        self.stream.write(f"{title}\n\n{label}\n> {value}")
+        self.stream.write("\n\nEnter guardar · Escape cancelar")
         self.stream.flush()
 
     @staticmethod

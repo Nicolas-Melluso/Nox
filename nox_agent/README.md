@@ -1,4 +1,4 @@
-# Nox Installer
+# Nox Agent
 
 ## Activar el entorno local
 
@@ -55,6 +55,9 @@ nox config actual
 nox --config logs
 nox --config logs --log-level DEBUG --scope global
 nox config logs --log-level WARNING --scope local
+nox config models
+nox config models --provider ollama --model <modelo> --scope global
+nox config models --model <modelo-del-proyecto> --scope local
 ```
 
 El ámbito `global` se guarda en `%LOCALAPPDATA%\Nox\config.toml`. El ámbito
@@ -67,7 +70,45 @@ nox --json config actual
 nox --json --config logs
 ```
 
-Por ahora, `Memory`, `Models` y `Security` aparecen como `Próximamente`.
+Por ahora, `Memory` y `Security` aparecen como `Próximamente`.
+
+## Configurar Ollama
+
+Nox usa Ollama como primer proveedor local, pero no lo instala ni administra.
+Con Ollama instalado y un modelo descargado, configurá el nombre exacto:
+
+```powershell
+ollama list
+nox config models --provider ollama --model <modelo> --scope global
+```
+
+La API local predeterminada es `http://127.0.0.1:11434`. Si Ollama está en
+otra dirección:
+
+```powershell
+nox config models --ollama-url http://servidor:11434 --scope global
+```
+
+## Iniciar una conversación
+
+Desde un proyecto inicializado con `nox init`:
+
+```powershell
+nox start
+```
+
+La sesión conserva el historial solamente en memoria. Sus comandos internos
+son:
+
+```text
+/help     Muestra la ayuda
+/status   Muestra el contexto activo
+/clear    Limpia la conversación
+/exit     Termina Nox
+```
+
+Esta primera versión del REPL conversa con el modelo, pero todavía no ejecuta
+herramientas ni modifica archivos.
 
 ## Salir del entorno
 

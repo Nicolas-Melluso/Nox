@@ -42,6 +42,26 @@ def configure_config_parser(
         choices=[scope.value for scope in ConfigScope],
         help="Ámbito que se consultará o modificará: global o local.",
     )
+    models_parser = commands.add_parser(
+        "models",
+        help="Consulta o modifica el proveedor y modelo de Nox.",
+    )
+    models_parser.add_argument(
+        "--provider",
+        type=str.lower,
+        choices=ConfigurationCatalog.option("models.provider").choices,
+        help="Proveedor de inferencia.",
+    )
+    models_parser.add_argument("--model", help="Nombre exacto del modelo.")
+    models_parser.add_argument(
+        "--ollama-url",
+        help="Dirección del servicio local de Ollama.",
+    )
+    models_parser.add_argument(
+        "--scope",
+        choices=[scope.value for scope in ConfigScope],
+        help="Ámbito que se consultará o modificará: global o local.",
+    )
 
 
 def run_config(
@@ -67,6 +87,61 @@ def run_config(
         return 0
     if command == "logs":
         return _run_logs(manager, arguments, emit_json)
+    if command == "models":
+        return _run_models(manager, arguments, emit_json)
+    return 0
+
+
+def _run_models(
+    manager: ConfigurationManager,
+    arguments: argparse.Namespace,
+    emit_json: JsonEmitter,
+) -> int:
+    scope = ConfigScope(arguments.scope) if arguments.scope else None
+    changes = {
+        key: value
+        for key, value in {
+            "models.provider": arguments.provider,
+            "models.model": arguments.model,
+            "models.ollama_url": arguments.ollama_url,
+        }.items()
+        if value is not None
+    }
+    if changes and scope is None:
+        raise NoxErrorFactory.create(
+            ErrorCode.CONFIG_INVALID,
+            detail="Para modificar models indicá --scope global o --scope local.",
+        )
+
+    saved_path: Path | None = None
+    if changes and scope is not None:
+        manager.set_many(changes, scope)
+        saved_path = manager.path_for_scope(scope)
+
+    configuration = manager.effective()
+    keys = ("models.provider", "models.model", "models.ollama_url")
+    data: dict[str, object] = {
+        "values": {
+            key: configuration.values[key].to_dict()
+            for key in keys
+        },
+        "saved_path": str(saved_path) if saved_path else None,
+    }
+    if scope is not None:
+        data["scope"] = scope.value
+
+    if arguments.json:
+        emit_json("config.models", data)
+    else:
+        if saved_path is not None:
+            print("Configuración guardada.\n")
+        for key in keys:
+            value = configuration.values[key]
+            shown = value.value or "(sin definir)"
+            print(f"{key} = {shown}")
+            print(f"  Origen: {value.source}")
+        if saved_path is not None:
+            print(f"Archivo: {saved_path}")
     return 0
 
 
@@ -135,7 +210,7 @@ def _print_actual(
         return
     print("Configuración actual\n")
     for key, value in configuration.values.items():
-        print(f"{key} = {value.value}")
+        print(f"{key} = {value.value or '(sin definir)'}")
         print(f"  Origen: {value.source}")
         print(f"  General: {value.global_value or '(sin definir)'}")
         print(f"  Local: {value.local_value or '(sin definir)'}")

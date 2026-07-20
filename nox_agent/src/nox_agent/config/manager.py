@@ -89,16 +89,26 @@ class ConfigurationManager:
         return EffectiveConfiguration(values=values, project=self.project)
 
     def set(self, key: str, value: object, scope: ConfigScope) -> str:
-        option = ConfigurationCatalog.option(key)
-        if scope not in option.scopes:
-            raise NoxErrorFactory.create(
-                ErrorCode.CONFIG_INVALID,
-                detail=f"{key} no admite el ámbito {scope.value}.",
-            )
-        normalized = option.normalize(value)
+        return self.set_many({key: value}, scope)[key]
+
+    def set_many(
+        self,
+        changes: dict[str, object],
+        scope: ConfigScope,
+    ) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, value in changes.items():
+            option = ConfigurationCatalog.option(key)
+            if scope not in option.scopes:
+                raise NoxErrorFactory.create(
+                    ErrorCode.CONFIG_INVALID,
+                    detail=f"{key} no admite el ámbito {scope.value}.",
+                )
+            normalized[key] = option.normalize(value)
+
         path = self.path_for_scope(scope)
         values = self._read_path(path)
-        values[key] = normalized
+        values.update(normalized)
 
         try:
             FileManager.atomic_write_text(
@@ -157,10 +167,10 @@ class ConfigurationManager:
 
         ConfigurationManager._validate_document(data, path)
         values: dict[str, str] = {}
-        logs = data.get("logs")
-        if isinstance(logs, dict) and "level" in logs:
-            option = ConfigurationCatalog.option("logs.level")
-            values[option.key] = option.normalize(logs["level"])
+        for option in ConfigurationCatalog.OPTIONS.values():
+            section = data.get(option.section)
+            if isinstance(section, dict) and option.name in section:
+                values[option.key] = option.normalize(section[option.name])
         return values
 
     @staticmethod
@@ -173,26 +183,37 @@ class ConfigurationManager:
                     f"recibido {data.get('schema_version')!r}."
                 ),
             )
-        unknown_sections = sorted(set(data) - {"schema_version", "logs"})
+        allowed_sections = {
+            section.key for section in ConfigurationCatalog.SECTIONS
+        } | {"schema_version"}
+        unknown_sections = sorted(set(data) - allowed_sections)
         if unknown_sections:
             raise NoxErrorFactory.create(
                 ErrorCode.CONFIG_INVALID,
                 detail=f"Secciones desconocidas: {', '.join(unknown_sections)}",
             )
-        logs = data.get("logs")
-        if logs is None:
-            return
-        if not isinstance(logs, dict):
-            raise NoxErrorFactory.create(
-                ErrorCode.CONFIG_INVALID,
-                detail="La sección logs debe ser una tabla TOML.",
-            )
-        unknown_options = sorted(set(logs) - {"level"})
-        if unknown_options:
-            raise NoxErrorFactory.create(
-                ErrorCode.CONFIG_INVALID,
-                detail=f"Opciones desconocidas en logs: {', '.join(unknown_options)}",
-            )
+        for section in ConfigurationCatalog.SECTIONS:
+            content = data.get(section.key)
+            if content is None:
+                continue
+            if not isinstance(content, dict):
+                raise NoxErrorFactory.create(
+                    ErrorCode.CONFIG_INVALID,
+                    detail=f"La sección {section.key} debe ser una tabla TOML.",
+                )
+            allowed_options = {
+                option.name
+                for option in ConfigurationCatalog.options_for_section(section.key)
+            }
+            unknown_options = sorted(set(content) - allowed_options)
+            if unknown_options:
+                raise NoxErrorFactory.create(
+                    ErrorCode.CONFIG_INVALID,
+                    detail=(
+                        f"Opciones desconocidas en {section.key}: "
+                        f"{', '.join(unknown_options)}"
+                    ),
+                )
 
     @staticmethod
     def _render(values: dict[str, str]) -> str:

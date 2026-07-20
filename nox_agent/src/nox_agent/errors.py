@@ -82,6 +82,26 @@ class ErrorCode(StrEnum):
         "EN0178016",
         "El menú interactivo requiere una terminal compatible.",
     )
+    SESSION_PROJECT_REQUIRED = (
+        "EN0178017",
+        "Nox solamente puede iniciar una sesión dentro de un proyecto válido.",
+    )
+    MODEL_NOT_CONFIGURED = (
+        "EN0178018",
+        "No hay un modelo configurado para la sesión.",
+    )
+    MODEL_PROVIDER_UNAVAILABLE = (
+        "EN0178019",
+        "Nox no pudo comunicarse con el proveedor del modelo.",
+    )
+    MODEL_RESPONSE_INVALID = (
+        "EN0178020",
+        "El proveedor devolvió una respuesta que Nox no puede interpretar.",
+    )
+    SESSION_TERMINAL_REQUIRED = (
+        "EN0178021",
+        "La sesión interactiva requiere una terminal compatible.",
+    )
 
 
 class NoxError(Exception):
