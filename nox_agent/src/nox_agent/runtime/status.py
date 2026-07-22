@@ -20,6 +20,8 @@ class StatusService:
         project = manager.project
         model = configuration.values["models.model"].value
         provider = configuration.values["models.provider"].value
+        projects = registry.get("projects")
+        project_count = len(projects) if isinstance(projects, dict) else 0
 
         return {
             "schema_version": STATUS_SCHEMA_VERSION,
@@ -50,7 +52,7 @@ class StatusService:
             },
             "registry": {
                 "path": str(registry_path()),
-                "project_count": len(registry["projects"]),
+                "project_count": project_count,
             },
             "capabilities": [
                 "project.init",
@@ -58,6 +60,10 @@ class StatusService:
                 "config.write",
                 "models.configure",
                 "models.chat",
+                "models.install",
+                "models.remove",
+                "engines.install",
+                "engines.versions",
                 "status.read",
                 "session.start",
             ],
@@ -73,10 +79,10 @@ class StatusService:
         projects = registry["projects"]
         assert isinstance(projects, dict)
         entry = projects.get(project.manifest.project_id)
+        entry_path = entry.get("path") if isinstance(entry, dict) else None
         registered = (
-            isinstance(entry, dict)
-            and isinstance(entry.get("path"), str)
-            and Path(entry["path"]).resolve() == project.root
+            isinstance(entry_path, str)
+            and Path(entry_path).resolve() == project.root
         )
         parent = None
         if project.parent is not None:

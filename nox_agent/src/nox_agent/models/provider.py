@@ -3,9 +3,10 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
-from nox_agent.config.manager import EffectiveConfiguration
-from nox_agent.errors import ErrorCode, NoxErrorFactory
+from nox_agent.models.manager import ModelManager
+from nox_agent.tools import ConsoleMenu
 
 TokenHandler = Callable[[str], None]
 
@@ -34,35 +35,25 @@ class ModelProvider(ABC):
     ) -> str:
         """Genera la siguiente respuesta y opcionalmente transmite fragmentos."""
 
-    @abstractmethod
-    def available_models(self) -> list[str]:
-        """Lista los modelos instalados en el proveedor."""
 
+class ProviderIntegration(Protocol):
+    """Une conversación, modelos y motor sin filtrarlos al núcleo de Nox."""
 
-class ProviderFactory:
-    """Construye el adaptador indicado por la configuración actual."""
+    @property
+    def name(self) -> str: ...
 
-    @staticmethod
-    def create(configuration: EffectiveConfiguration) -> ModelProvider:
-        values = configuration.values
-        provider = values["models.provider"].value
-        model = values["models.model"].value
-        if not model:
-            raise NoxErrorFactory.create(
-                ErrorCode.MODEL_NOT_CONFIGURED,
-                detail=(
-                    "Configurá uno con: nox config models "
-                    "--provider ollama --model <nombre> --scope global"
-                ),
-            )
-        if provider == "ollama":
-            from nox_agent.models.ollama import OllamaProvider
+    @property
+    def endpoint(self) -> str: ...
 
-            return OllamaProvider(
-                model=model,
-                base_url=values["models.ollama_url"].value,
-            )
-        raise NoxErrorFactory.create(
-            ErrorCode.CONFIG_VALUE_INVALID,
-            detail=f"Proveedor no soportado: {provider}",
-        )
+    @property
+    def recommended_model(self) -> str | None: ...
+
+    def create_provider(self, model: str) -> ModelProvider: ...
+
+    def create_manager(self) -> ModelManager: ...
+
+    def ensure_engine(self, menu: ConsoleMenu) -> bool | None: ...
+
+    def recover_service(self, menu: ConsoleMenu, manager: ModelManager) -> bool: ...
+
+    def require_engine(self) -> None: ...

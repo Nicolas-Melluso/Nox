@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Never
 from urllib.parse import urlparse
 
 from nox_agent.errors import ErrorCode, NoxErrorFactory
@@ -60,7 +61,7 @@ class ConfigOption:
             return normalized.rstrip("/")
         return normalized
 
-    def _invalid(self, reason: str) -> None:
+    def _invalid(self, reason: str) -> Never:
         raise NoxErrorFactory.create(
             ErrorCode.CONFIG_VALUE_INVALID,
             detail=f"{self.key}: {reason}.",
@@ -113,10 +114,9 @@ class ConfigurationCatalog:
             "models",
             "provider",
             "ollama",
-            ConfigValueKind.CHOICE,
+            ConfigValueKind.TEXT,
             ALL_SCOPES,
             "Proveedor de inferencia.",
-            ("ollama",),
         ),
         "models.model": ConfigOption(
             "models.model",

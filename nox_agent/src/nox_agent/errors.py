@@ -102,6 +102,58 @@ class ErrorCode(StrEnum):
         "EN0178021",
         "La sesión interactiva requiere una terminal compatible.",
     )
+    ENGINE_UNSUPPORTED_PLATFORM = (
+        "EN0178022",
+        "El motor solicitado no es compatible con este sistema.",
+    )
+    ENGINE_NOT_INSTALLED = (
+        "EN0178023",
+        "El motor solicitado no está instalado.",
+    )
+    ENGINE_RELEASE_UNAVAILABLE = (
+        "EN0178024",
+        "Nox no pudo encontrar la versión solicitada del motor.",
+    )
+    ENGINE_DOWNLOAD_FAILED = (
+        "EN0178025",
+        "Nox no pudo descargar el instalador del motor.",
+    )
+    ENGINE_INTEGRITY_FAILED = (
+        "EN0178026",
+        "El instalador descargado no superó la validación de integridad.",
+    )
+    ENGINE_SIGNATURE_INVALID = (
+        "EN0178027",
+        "La firma digital del instalador no es válida.",
+    )
+    ENGINE_INSTALL_FAILED = (
+        "EN0178028",
+        "La instalación del motor no pudo completarse.",
+    )
+    ACTION_CONFIRMATION_REQUIRED = (
+        "EN0178029",
+        "La operación requiere confirmación explícita.",
+    )
+    MODEL_DOWNLOAD_FAILED = (
+        "EN0178030",
+        "Nox no pudo descargar el modelo.",
+    )
+    MODEL_NOT_FOUND = (
+        "EN0178031",
+        "El modelo solicitado no está instalado.",
+    )
+    MODEL_DELETE_FAILED = (
+        "EN0178032",
+        "Nox no pudo eliminar el modelo.",
+    )
+    OPERATION_CANCELLED = (
+        "EN0178033",
+        "La operación fue cancelada por el usuario.",
+    )
+    ENGINE_START_FAILED = (
+        "EN0178034",
+        "Nox no pudo iniciar el motor local.",
+    )
 
 
 class NoxError(Exception):

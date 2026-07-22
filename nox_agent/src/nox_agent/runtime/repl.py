@@ -6,11 +6,11 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
-from nox_agent.config import ConfigurationManager, EffectiveConfiguration
 from nox_agent.errors import ErrorCode, NoxError, NoxErrorFactory
 from nox_agent.models import ChatMessage, ModelProvider, ProviderFactory
-from nox_agent.registry import register_context
+from nox_agent.runtime.startup import SessionStartup
 from nox_agent.runtime.status import StatusService
+from nox_agent.tools import ConsoleMenu
 
 
 class ReplSession:
@@ -34,19 +34,20 @@ class ReplSession:
         self.history: list[ChatMessage] = []
 
     def run(self) -> int:
-        manager = ConfigurationManager(self.start)
-        if manager.project is None:
-            raise NoxErrorFactory.create(
-                ErrorCode.SESSION_PROJECT_REQUIRED,
-                detail="Ejecutá nox init en el proyecto antes de usar nox start.",
-            )
         if self.require_tty and (
             not self.input.isatty() or not self.output.isatty()
         ):
             raise NoxErrorFactory.create(ErrorCode.SESSION_TERMINAL_REQUIRED)
-        register_context(manager.project)
-        configuration = manager.effective()
-        self.provider = self._create_provider(configuration)
+
+        configuration = SessionStartup(
+            self.start,
+            nox_version=self.nox_version,
+            menu=ConsoleMenu(stream=self.output),
+        ).prepare()
+        if configuration is None:
+            return 0
+
+        self.provider = ProviderFactory.create(configuration)
         self._reset_history()
         self._print_banner()
 
@@ -63,6 +64,7 @@ class ReplSession:
             text = text.strip()
             if not text:
                 continue
+            # La barra inicial es la única frontera entre Nox y el modelo.
             if text.startswith("/"):
                 if self._run_internal_command(text):
                     return 0
@@ -74,8 +76,8 @@ class ReplSession:
             error = NoxErrorFactory.create(
                 ErrorCode.MODEL_NOT_CONFIGURED,
                 detail=(
-                    "Usá nox config models --model <nombre> --scope global "
-                    "antes de iniciar la conversación."
+                    "Usá `nox engines status`, `nox models install <nombre>` "
+                    "y `nox models use <nombre> --scope global`."
                 ),
             )
             self._write(f"{error.format_for_cli()}\n")
@@ -103,10 +105,10 @@ class ReplSession:
             return True
         if normalized in {"/help", "/ayuda"}:
             self._write(
-                "\n/help     Muestra esta ayuda\n"
-                "/status   Muestra el contexto activo\n"
-                "/clear    Limpia la conversación actual\n"
-                "/exit     Termina Nox\n\n"
+                "\n/help o /ayuda       Muestra esta ayuda\n"
+                "/status o /estado    Muestra el contexto activo\n"
+                "/clear o /limpiar    Limpia la conversación actual\n"
+                "/exit o /salir       Termina Nox\n\n"
             )
             return False
         if normalized in {"/clear", "/limpiar"}:
@@ -118,17 +120,6 @@ class ReplSession:
             return False
         self._write(f"Comando desconocido: {command}. Usá /help.\n")
         return False
-
-    def _create_provider(
-        self,
-        configuration: EffectiveConfiguration,
-    ) -> ModelProvider | None:
-        try:
-            return ProviderFactory.create(configuration)
-        except NoxError as error:
-            if error.code == ErrorCode.MODEL_NOT_CONFIGURED:
-                return None
-            raise
 
     def _reset_history(self) -> None:
         status = StatusService.collect(self.start, nox_version=self.nox_version)

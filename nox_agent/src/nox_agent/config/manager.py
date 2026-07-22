@@ -109,11 +109,42 @@ class ConfigurationManager:
         path = self.path_for_scope(scope)
         values = self._read_path(path)
         values.update(normalized)
+        self._write_path(path, values)
+        return normalized
 
+    def unset(self, key: str, scope: ConfigScope) -> str | None:
+        return self.unset_many((key,), scope).get(key)
+
+    def unset_many(
+        self,
+        keys: tuple[str, ...],
+        scope: ConfigScope,
+    ) -> dict[str, str]:
+        for key in keys:
+            option = ConfigurationCatalog.option(key)
+            if scope not in option.scopes:
+                raise NoxErrorFactory.create(
+                    ErrorCode.CONFIG_INVALID,
+                    detail=f"{key} no admite el ámbito {scope.value}.",
+                )
+
+        path = self.path_for_scope(scope)
+        values = self._read_path(path)
+        removed = {
+            key: values.pop(key)
+            for key in keys
+            if key in values
+        }
+        if removed:
+            self._write_path(path, values)
+        return removed
+
+    @staticmethod
+    def _write_path(path: Path, values: dict[str, str]) -> None:
         try:
             FileManager.atomic_write_text(
                 path,
-                self._render(values),
+                ConfigurationManager._render(values),
                 create_parents=True,
             )
         except OSError as error:
@@ -121,7 +152,6 @@ class ConfigurationManager:
                 ErrorCode.FILESYSTEM_ERROR,
                 detail=f"Escribir {path}: {error}",
             ) from error
-        return normalized
 
     def values_for_scope(self, scope: ConfigScope) -> dict[str, str]:
         return self._read_path(self.path_for_scope(scope))

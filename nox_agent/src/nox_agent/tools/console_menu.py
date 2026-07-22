@@ -95,7 +95,7 @@ class ConsoleMenu:
             if key in {"\x00", "\xe0"}:
                 msvcrt.getwch()
                 continue
-            if key == "\x1b":
+            if key in {"\x1b", "\x03"}:
                 return None
             if key == "\r":
                 return "".join(buffer).strip()
@@ -139,7 +139,10 @@ class ConsoleMenu:
         if key in {"\x00", "\xe0"}:
             extended = msvcrt.getwch()
             return {"H": "up", "P": "down"}.get(extended, "other")
-        return {"\r": "enter", "\x1b": "escape"}.get(key, "other")
+        return {"\r": "enter", "\x1b": "escape", "\x03": "escape"}.get(
+            key,
+            "other",
+        )
 
     @staticmethod
     def _first_enabled(items: list[MenuItem]) -> int:

@@ -9,6 +9,7 @@ from nox_agent.config.manager import ConfigurationManager, EffectiveConfiguratio
 from nox_agent.config.menu import ConfigurationMenu
 from nox_agent.errors import ErrorCode, NoxErrorFactory
 from nox_agent.logs import LogLevel, NoxLogs
+from nox_agent.models import ProviderFactory
 from nox_agent.registry import register_context
 
 JsonEmitter = Callable[[str, object], None]
@@ -49,7 +50,7 @@ def configure_config_parser(
     models_parser.add_argument(
         "--provider",
         type=str.lower,
-        choices=ConfigurationCatalog.option("models.provider").choices,
+        choices=ProviderFactory.names(),
         help="Proveedor de inferencia.",
     )
     models_parser.add_argument("--model", help="Nombre exacto del modelo.")

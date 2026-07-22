@@ -10,11 +10,16 @@ from pathlib import Path
 from nox_agent import __version__  # type: ignore
 from nox_agent.config import ConfigurationManager
 from nox_agent.config.command import configure_config_parser, run_config
+from nox_agent.config.menu import ConfigurationMenu
 from nox_agent.errors import ErrorCode, NoxError, NoxErrorFactory
+from nox_agent.engines.command import configure_engines_parser, run_engines
 from nox_agent.logs import LogLevel, NoxLogs
+from nox_agent.models.command import configure_models_parser, run_models
+from nox_agent.models.setup import LocalIntelligenceSetup
 from nox_agent.project import InitResult, initialize_project
 from nox_agent.registry import context_role, register_context
 from nox_agent.runtime import ReplSession, StatusService
+from nox_agent.tools import ConsoleMenu, MenuItem
 
 logger = NoxLogs.get_logger("cli")
 
@@ -53,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Abre el REPL de Nox dentro del proyecto actual.",
     )
     configure_config_parser(subparsers)
+    configure_engines_parser(subparsers)
+    configure_models_parser(subparsers)
     return parser
 
 
@@ -81,12 +88,17 @@ def main(argv: list[str] | None = None) -> int:
             _print_json("status", None, error=critical)
             return 2
         return 0
-    if arguments.command is None:
+    if arguments.command is None and (
+        arguments.json
+        or not sys.stdin.isatty()
+        or not sys.stdout.isatty()
+    ):
         parser.print_help()
         return 0
-
     try:
         _configure_effective_logs(Path.cwd())
+        if arguments.command is None:
+            return _run_home()
         if arguments.command == "init":
             return _run_init(output_json=arguments.json)
         if arguments.command == "config":
@@ -102,6 +114,21 @@ def main(argv: list[str] | None = None) -> int:
                     detail="nox start es interactivo y no admite --json.",
                 )
             return ReplSession(Path.cwd(), nox_version=__version__).run()
+        if arguments.command == "engines":
+            return run_engines(arguments, emit_json=_print_json)
+        if arguments.command == "models":
+            return run_models(
+                arguments,
+                start=Path.cwd(),
+                emit_json=_print_json,
+            )
+    except KeyboardInterrupt:
+        cancelled = NoxErrorFactory.create(ErrorCode.OPERATION_CANCELLED)
+        if arguments.json:
+            _print_json(_command_identifier(arguments), None, error=cancelled)
+        else:
+            print(f"\n{cancelled.format_for_cli()}", file=sys.stderr)
+        return 130
     except NoxError as error:
         if arguments.json:
             _print_json(_command_identifier(arguments), None, error=error)
@@ -120,6 +147,51 @@ def main(argv: list[str] | None = None) -> int:
             print(critical.format_for_cli(), file=sys.stderr)
         return 2
     return 0
+
+
+def _run_home() -> int:
+    menu = ConsoleMenu()
+    while True:
+        selected = menu.select(
+            "Nox",
+            [
+                MenuItem("Iniciar Nox", "start"),
+                MenuItem("Preparar inteligencia local", "prepare"),
+                MenuItem("Configuración", "config"),
+                MenuItem("Ayuda", "help"),
+                MenuItem("Salir", "exit"),
+            ],
+            description=f"Nox {__version__}",
+        )
+        if selected is None or selected.value == "exit":
+            menu.clear()
+            return 0
+        if selected.value == "start":
+            return ReplSession(Path.cwd(), nox_version=__version__).run()
+        if selected.value == "prepare":
+            manager = ConfigurationManager(Path.cwd())
+            if LocalIntelligenceSetup(manager, menu).ensure_ready():
+                values = manager.effective().values
+                menu.message(
+                    "Inteligencia local preparada",
+                    [
+                        f"Proveedor: {values['models.provider'].value}",
+                        f"Modelo: {values['models.model'].value}",
+                    ],
+                )
+        elif selected.value == "config":
+            ConfigurationMenu(Path.cwd()).run()
+        elif selected.value == "help":
+            menu.message(
+                "Comandos principales",
+                [
+                    "nox start · Iniciar una conversación",
+                    "nox init · Inicializar el proyecto actual",
+                    "nox models · Preparar y administrar modelos",
+                    "nox --config · Configurar Nox",
+                    "nox --help · Ver toda la ayuda técnica",
+                ],
+            )
 
 
 def _run_init(*, output_json: bool) -> int:
@@ -213,6 +285,10 @@ def _normalize_argv(argv: list[str]) -> list[str]:
 def _command_identifier(arguments: argparse.Namespace) -> str | None:
     if arguments.command == "config" and arguments.config_command:
         return f"config.{arguments.config_command}"
+    if arguments.command == "engines" and arguments.engines_command:
+        return f"engines.{arguments.engines_command}"
+    if arguments.command == "models" and arguments.models_command:
+        return f"models.{arguments.models_command}"
     return arguments.command
 
 
