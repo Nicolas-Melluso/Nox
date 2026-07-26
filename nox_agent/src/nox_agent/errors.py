@@ -154,6 +154,10 @@ class ErrorCode(StrEnum):
         "EN0178034",
         "Nox no pudo iniciar el motor local.",
     )
+    PROJECT_ROOT_INVALID = (
+        "EN0178035",
+        "La raíz del proyecto no existe o no es una carpeta accesible.",
+    )
 
 
 class NoxError(Exception):

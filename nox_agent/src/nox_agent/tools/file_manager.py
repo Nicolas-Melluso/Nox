@@ -1,7 +1,12 @@
 """Operaciones de archivos reutilizables de Nox."""
 
 import os
+import tempfile
+import time
 from pathlib import Path
+
+REPLACE_ATTEMPTS = 5
+REPLACE_RETRY_SECONDS = 0.01
 
 
 class FileManager:
@@ -17,9 +22,38 @@ class FileManager:
         if create_parents:
             path.parent.mkdir(parents=True, exist_ok=True)
 
-        temporary_path = path.with_name(f".{path.name}.nox.tmp")
+        temporary_path: Path | None = None
         try:
-            temporary_path.write_text(content, encoding="utf-8", newline="")
-            os.replace(temporary_path, path)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=path.parent,
+                prefix=f"{path.name}.nox.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(content)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            FileManager._replace(temporary_path, path)
+            temporary_path = None
         finally:
-            temporary_path.unlink(missing_ok=True)
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    # La limpieza nunca debe ocultar el error de escritura.
+                    pass
+
+    @staticmethod
+    def _replace(source: Path, destination: Path) -> None:
+        for attempt in range(REPLACE_ATTEMPTS):
+            try:
+                os.replace(source, destination)
+                return
+            except PermissionError:
+                if attempt == REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(REPLACE_RETRY_SECONDS * (2**attempt))

@@ -8,10 +8,7 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from nox_agent.errors import ErrorCode, NoxErrorFactory
-
-CLEAR_SCREEN = "\x1b[2J\x1b[H"
-HIDE_CURSOR = "\x1b[?25l"
-SHOW_CURSOR = "\x1b[?25h"
+from nox_agent.tools.terminal import TerminalDisplay
 
 
 @dataclass(frozen=True)
@@ -27,6 +24,7 @@ class ConsoleMenu:
 
     def __init__(self, *, stream: TextIO | None = None) -> None:
         self.stream = stream or sys.stdout
+        self.display = TerminalDisplay(self.stream)
 
     def select(
         self,
@@ -44,9 +42,7 @@ class ConsoleMenu:
             return None
 
         selected = self._first_enabled(items)
-        self.stream.write(HIDE_CURSOR)
-        self.stream.flush()
-        try:
+        with self.display.hidden_cursor():
             while True:
                 self._render(title, items, selected, description)
                 key = self._read_key()
@@ -58,14 +54,11 @@ class ConsoleMenu:
                     selected = self._move(items, selected, 1)
                 elif key == "enter" and items[selected].enabled:
                     return items[selected]
-        finally:
-            self.stream.write(SHOW_CURSOR)
-            self.stream.flush()
 
     def message(self, title: str, lines: list[str]) -> None:
         if not sys.stdin.isatty() or not self.stream.isatty():
             return
-        self.stream.write(CLEAR_SCREEN)
+        self.display.clear()
         self.stream.write(f"{title}\n\n")
         for line in lines:
             self.stream.write(f"{line}\n")
@@ -105,8 +98,7 @@ class ConsoleMenu:
                 buffer.append(key)
 
     def clear(self) -> None:
-        self.stream.write(CLEAR_SCREEN)
-        self.stream.flush()
+        self.display.clear()
 
     def _render(
         self,
@@ -115,7 +107,7 @@ class ConsoleMenu:
         selected: int,
         description: str | None,
     ) -> None:
-        self.stream.write(CLEAR_SCREEN)
+        self.display.clear()
         self.stream.write(f"{title}\n")
         if description:
             self.stream.write(f"{description}\n")
@@ -128,7 +120,7 @@ class ConsoleMenu:
         self.stream.flush()
 
     def _render_input(self, title: str, label: str, value: str) -> None:
-        self.stream.write(CLEAR_SCREEN)
+        self.display.clear()
         self.stream.write(f"{title}\n\n{label}\n> {value}")
         self.stream.write("\n\nEnter guardar · Escape cancelar")
         self.stream.flush()

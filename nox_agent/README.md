@@ -28,6 +28,10 @@ Al ejecutar solamente `nox` en una terminal interactiva se abre el inicio
 guiado. Desde ahí se puede iniciar Nox, preparar la inteligencia local o abrir
 la configuración. `nox --help` conserva la ayuda técnica completa.
 
+Los menús habilitan temporalmente el modo de terminal virtual cuando Windows
+lo admite. En consolas sin ese soporte, Nox usa las API de consola de Windows y
+no imprime secuencias ANSI como texto.
+
 ## Inicializar un proyecto
 
 Desde la raíz del proyecto que querés inicializar:
@@ -38,6 +42,10 @@ nox init
 
 El comando crea `.nox/project.toml`, agrega `/.nox/` al `.gitignore` y
 registra el proyecto en `%LOCALAPPDATA%\Nox\state\projects.json`.
+
+Antes de escribir, Nox comprueba que la raíz siga existiendo. Los archivos se
+reemplazan mediante un temporal único en el mismo directorio; una raíz que
+desaparece nunca se vuelve a crear silenciosamente.
 
 Si el proyecto vive dentro de otro proyecto Nox, el hijo declara a su padre y
 Nox informa cuál de los dos contextos está activo.
@@ -164,6 +172,26 @@ son:
 La `/` es obligatoria para los comandos internos. Cualquier entrada sin `/`,
 incluidas palabras como `help`, `clear` o `exit`, se envía al modelo local como
 parte de la conversación.
+
+La conversación diferencia claramente a cada participante. Mientras el modelo
+prepara la respuesta, Nox mantiene visible un estado de actividad:
+
+```text
+You> Hola?
+
+Nox> Pensando...
+```
+
+Cuando llega el primer fragmento, esa misma línea se transforma en:
+
+```text
+Nox> ¡Hola! ¿En qué puedo ayudarte?
+
+You>
+```
+
+`Pensando...` se reemplaza cuando llega el primer fragmento de la respuesta y
+también se limpia de forma controlada si la generación se cancela o falla.
 
 `Ctrl+C` se maneja como una cancelación controlada: vuelve desde los menús,
 cancela la entrada o respuesta actual dentro del REPL y, en un comando directo,

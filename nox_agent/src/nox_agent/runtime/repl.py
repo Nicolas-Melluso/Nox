@@ -12,6 +12,10 @@ from nox_agent.runtime.startup import SessionStartup
 from nox_agent.runtime.status import StatusService
 from nox_agent.tools import ConsoleMenu
 
+USER_PROMPT = "You> "
+NOX_PROMPT = "Nox> "
+THINKING_PROMPT = f"{NOX_PROMPT}Pensando..."
+
 
 class ReplSession:
     """Mantiene una conversación temporal dentro de un proyecto Nox."""
@@ -53,7 +57,7 @@ class ReplSession:
 
         while True:
             try:
-                text = self._read_line("nox> ")
+                text = self._read_line(USER_PROMPT)
             except KeyboardInterrupt:
                 self._write("\nEntrada cancelada. Usá /exit para salir.\n")
                 continue
@@ -84,19 +88,67 @@ class ReplSession:
             return
 
         self.history.append(ChatMessage("user", text))
-        self._write("\nNox> ")
+        answer_started = False
+        pending_tokens: list[str] = []
+
+        def show_token(token: str) -> None:
+            nonlocal answer_started
+            if not token:
+                return
+            if not answer_started:
+                pending_tokens.append(token)
+                if not any(part.strip() for part in pending_tokens):
+                    return
+                self._replace_thinking(NOX_PROMPT)
+                answer_started = True
+                self._write_token("".join(pending_tokens))
+                pending_tokens.clear()
+                return
+            self._write_token(token)
+
+        self._write(f"\n{THINKING_PROMPT}")
         try:
-            answer = self.provider.chat(self.history, on_token=self._write_token)
+            answer = self.provider.chat(self.history, on_token=show_token)
         except KeyboardInterrupt:
             self.history.pop()
-            self._write("\nRespuesta cancelada.\n")
+            self._finish_interrupted_response(
+                "Respuesta cancelada.",
+                answer_started=answer_started,
+            )
             return
         except NoxError as error:
             self.history.pop()
-            self._write(f"\n{error.format_for_cli()}\n")
+            self._finish_interrupted_response(
+                error.format_for_cli(),
+                answer_started=answer_started,
+            )
             return
+        except Exception:
+            if answer_started:
+                self._write("\n")
+            else:
+                self._replace_thinking("")
+            raise
+        if not answer_started:
+            self._replace_thinking(f"{NOX_PROMPT}{answer}")
         self.history.append(ChatMessage("assistant", answer))
         self._write("\n\n")
+
+    def _replace_thinking(self, replacement: str) -> None:
+        self._write(f"\r{' ' * len(THINKING_PROMPT)}\r{replacement}")
+
+    def _finish_interrupted_response(
+        self,
+        message: str,
+        *,
+        answer_started: bool,
+    ) -> None:
+        shown = f"{NOX_PROMPT}{message}"
+        if answer_started:
+            self._write(f"\n\n{shown}\n\n")
+        else:
+            self._replace_thinking(shown)
+            self._write("\n\n")
 
     def _run_internal_command(self, command: str) -> bool:
         normalized = command.casefold()

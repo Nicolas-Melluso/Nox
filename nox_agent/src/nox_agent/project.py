@@ -53,7 +53,7 @@ class InitResult:
 def initialize_project(root: Path, *, nox_version: str) -> InitResult:
     """Inicializa o valida el proyecto cuya raíz fue indicada explícitamente."""
 
-    project_root = root.resolve()
+    project_root = _resolve_project_root(root)
     nox_directory = project_root / NOX_DIRECTORY_NAME
 
     if nox_directory.exists():
@@ -73,21 +73,58 @@ def initialize_project(root: Path, *, nox_version: str) -> InitResult:
         nox_version=nox_version,
         parent_context=parent_context,
     )
+    manifest_content = _render_manifest(manifest)
 
+    created_nox_directory = False
     try:
         nox_directory.mkdir()
+        created_nox_directory = True
         FileManager.atomic_write_text(
             nox_directory / MANIFEST_FILENAME,
-            _render_manifest(manifest),
+            manifest_content,
         )
     except OSError as error:
+        cleanup_detail = ""
+        if created_nox_directory:
+            try:
+                nox_directory.rmdir()
+            except OSError as cleanup_error:
+                cleanup_detail = (
+                    " | No se pudo retirar la carpeta .nox incompleta: "
+                    f"{cleanup_error}"
+                )
         raise NoxErrorFactory.create(
             ErrorCode.FILESYSTEM_ERROR,
-            detail=f"Crear la configuración del proyecto: {error}",
+            detail=(
+                f"Crear la configuración del proyecto: {error}"
+                f"{cleanup_detail}"
+            ),
         ) from error
 
     context = validate_project(project_root)
     return InitResult(context, True, gitignore_status)
+
+
+def _resolve_project_root(root: Path) -> Path:
+    try:
+        project_root = root.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise NoxErrorFactory.create(
+            ErrorCode.PROJECT_ROOT_INVALID,
+            detail=f"La ruta dejó de existir: {root}.",
+        ) from error
+    except OSError as error:
+        raise NoxErrorFactory.create(
+            ErrorCode.PROJECT_ROOT_INVALID,
+            detail=f"No se pudo acceder a {root}: {error}",
+        ) from error
+
+    if not project_root.is_dir():
+        raise NoxErrorFactory.create(
+            ErrorCode.PROJECT_ROOT_INVALID,
+            detail=f"Se esperaba una carpeta: {project_root}.",
+        )
+    return project_root
 
 
 def validate_project(root: Path) -> ProjectContext:
@@ -384,4 +421,3 @@ def _find_nox_ancestor(root: Path) -> Path | None:
         if current.parent == current:
             return None
         current = current.parent
-
