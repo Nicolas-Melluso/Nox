@@ -158,6 +158,14 @@ class ErrorCode(StrEnum):
         "EN0178035",
         "La raíz del proyecto no existe o no es una carpeta accesible.",
     )
+    CONTEXT_INVALID = (
+        "EN0178036",
+        "El archivo de contexto del proyecto no es válido.",
+    )
+    INTENT_RESPONSE_INVALID = (
+        "EN0178037",
+        "El modelo no devolvió una intención válida.",
+    )
 
 
 class NoxError(Exception):

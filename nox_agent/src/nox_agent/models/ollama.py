@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Never
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -146,6 +146,55 @@ class OllamaProvider(ModelProvider):
                 detail="Ollama no devolvió contenido para la respuesta.",
             )
         return answer
+
+    def generate_structured(
+        self,
+        messages: list[ChatMessage],
+        *,
+        schema: Mapping[str, object],
+    ) -> object:
+        payload: dict[str, object] = {
+            "model": self.model,
+            "messages": [message.to_dict() for message in messages],
+            "stream": False,
+            "format": dict(schema),
+            "think": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": 128,
+            },
+        }
+        response = self.client.json_request(
+            "POST",
+            "/api/chat",
+            payload,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if not isinstance(response, dict):
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_RESPONSE_INVALID,
+                detail="Ollama no devolvió un objeto para la respuesta estructurada.",
+            )
+        error_message = response.get("error")
+        if isinstance(error_message, str):
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_PROVIDER_UNAVAILABLE,
+                detail=f"Ollama: {error_message}",
+            )
+        message = response.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_RESPONSE_INVALID,
+                detail="Ollama no devolvió contenido estructurado.",
+            )
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as error:
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_RESPONSE_INVALID,
+                detail=f"Ollama devolvió JSON inválido: {error}",
+            ) from error
 
 
 class OllamaModelManager(ModelManager):

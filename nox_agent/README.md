@@ -5,9 +5,10 @@ sola vez en Windows, reconoce cada espacio de trabajo mediante una carpeta
 `.nox` y utiliza proveedores de inteligencia intercambiables para conversar y,
 en el futuro, ejecutar capacidades de forma controlada.
 
-La versión actual es **Nox 0.6.3**. Ya puede preparar Ollama, administrar
-modelos y mantener una conversación local, pero todavía no ejecuta herramientas
-ni controla la computadora.
+La versión actual es **Nox 0.7.0**. Ya puede preparar Ollama, administrar
+modelos, cargar contexto explícito de cada proyecto e identificar internamente
+la intención de cada mensaje antes de responder. Todavía no ejecuta
+herramientas ni controla la computadora.
 
 ## Por qué existe
 
@@ -64,6 +65,9 @@ nox / CLI
 ├── proyecto y registro
 │   ├── identidad .nox
 │   └── relaciones raíz, padre e hijo
+├── contexto
+│   ├── instrucciones humanas en context.md
+│   └── herencia validada de padre a hijo
 ├── configuración
 │   ├── general del usuario
 │   └── local del proyecto
@@ -75,6 +79,7 @@ nox / CLI
 ├── runtime
 │   ├── preparación de la sesión
 │   ├── estado interno
+│   ├── identificación estructurada de intenciones
 │   └── REPL conversacional
 └── tools
     ├── menús y terminal
@@ -90,6 +95,7 @@ Los dominios principales del código son:
 
 - `project.py`: inicialización, descubrimiento, manifiesto y relaciones entre
   proyectos.
+- `context.py`: creación, validación y composición del contexto humano.
 - `registry.py`: índice general de proyectos conocidos por Nox.
 - `config/`: catálogo, persistencia, menú y comandos de configuración.
 - `engines/`: instalación, detección e inicio del software que ejecuta modelos.
@@ -98,7 +104,7 @@ Los dominios principales del código son:
 - `errors.py` y `logs.py`: errores controlados y diagnóstico operativo.
 - `tools/`: utilidades compartidas del CLI.
 
-## Estado de la versión 0.6.3
+## Estado de la versión 0.7.0
 
 | Capacidad | Estado actual |
 |---|---|
@@ -113,8 +119,9 @@ Los dominios principales del código son:
 | Listado, descarga, selección y eliminación de modelos | Disponible |
 | Chat local con streaming | Disponible |
 | Proveedores diferentes de Ollama | Contrato preparado; no implementados |
-| Contexto humano específico del proyecto | Planificado para 0.7 |
-| Identificación estructurada de intenciones | Planificada para 0.7 |
+| Contexto humano específico del proyecto | Disponible |
+| Herencia de contexto padre → hijo | Disponible |
+| Identificación estructurada de intenciones | Disponible internamente |
 | Herramientas ejecutables por el agente | No implementadas |
 | Permisos y auditoría persistente | No implementados |
 | Memoria persistente | No implementada |
@@ -209,15 +216,33 @@ Desde la raíz del proyecto que querés inicializar:
 nox init
 ```
 
-El comando crea `.nox/project.toml`, agrega `/.nox/` al `.gitignore` y
-registra el proyecto en `%LOCALAPPDATA%\Nox\state\projects.json`.
+El comando crea `.nox/project.toml` y `.nox/context.md`, agrega `/.nox/` al
+`.gitignore` y registra el proyecto en
+`%LOCALAPPDATA%\Nox\state\projects.json`.
+
+`context.md` es un archivo de texto privado que el usuario puede editar para
+describir propósito, vocabulario, reglas y límites del proyecto. `nox init`
+nunca sobrescribe su contenido. Si ya existía, comprueba que sea un archivo
+UTF-8 válido y que no exceda 32 KiB.
+
+Un proyecto creado con Nox 0.6.3 sigue funcionando aunque no tenga
+`context.md`. Para materializar la plantilla nueva de forma explícita, basta
+con volver a ejecutar una vez:
+
+```powershell
+nox init
+```
 
 Antes de escribir, Nox comprueba que la raíz siga existiendo. Los archivos se
 reemplazan mediante un temporal único en el mismo directorio; una raíz que
 desaparece nunca se vuelve a crear silenciosamente.
 
 Si el proyecto vive dentro de otro proyecto Nox, el hijo declara a su padre y
-Nox informa cuál de los dos contextos está activo.
+Nox informa cuál de los dos contextos está activo. Los archivos se cargan
+desde el padre hasta el hijo; si hay una contradicción, prevalece el contexto
+más cercano al proyecto activo. La suma de la cadena no puede superar 64 KiB.
+Nox rechaza enlaces simbólicos como archivos de contexto para no leer datos
+ajenos al proyecto por accidente.
 
 ## Configurar Nox
 
@@ -334,13 +359,34 @@ son:
 ```text
 /help o /ayuda       Muestra la ayuda
 /status o /estado    Muestra el contexto activo
-/clear o /limpiar    Limpia la conversación
+/clear o /limpiar    Limpia la conversación y recarga context.md
 /exit o /salir       Termina Nox
 ```
 
 La `/` es obligatoria para los comandos internos. Cualquier entrada sin `/`,
 incluidas palabras como `help`, `clear` o `exit`, se envía al modelo local como
 parte de la conversación.
+
+Antes de pedir la respuesta conversacional, Nox usa el proveedor configurado
+para clasificar silenciosamente el mensaje en una de estas categorías:
+
+- Conversación general.
+- Consulta sobre el proyecto.
+- Cambio solicitado en el proyecto.
+- Operación sobre Nox.
+- Acción sobre el sistema.
+- Pedido que necesita aclaración.
+
+El proveedor devuelve solamente categoría, objetivo resumido y confianza
+mediante un esquema JSON controlado por Nox. La clasificación no se muestra en
+pantalla y no existe un comando público `nox intent`. Los comandos explícitos
+del CLI y los comandos `/` no pasan por el modelo.
+
+Una clasificación inválida produce un error controlado. Si la confianza es
+baja o el pedido es ambiguo, Nox hace una pregunta segura y no solicita una
+respuesta final ni ejecuta nada. Las capacidades, los permisos y el riesgo
+nunca los decide el modelo: pertenecerán a reglas deterministas de Nox en
+versiones futuras.
 
 La conversación diferencia claramente a cada participante. Mientras el modelo
 prepara la respuesta, Nox mantiene visible un estado de actividad:
@@ -359,15 +405,18 @@ Nox> ¡Hola! ¿En qué puedo ayudarte?
 You>
 ```
 
-`Pensando...` se reemplaza cuando llega el primer fragmento de la respuesta y
-también se limpia de forma controlada si la generación se cancela o falla.
+`Pensando...` cubre tanto la clasificación interna como la preparación de la
+respuesta. Se reemplaza cuando llega el primer fragmento y también se limpia de
+forma controlada si la generación se cancela o falla. Como un mensaje normal
+puede requerir dos inferencias locales, el primer turno después de cargar el
+modelo puede tardar más que en 0.6.3.
 
 `Ctrl+C` se maneja como una cancelación controlada: vuelve desde los menús,
 cancela la entrada o respuesta actual dentro del REPL y, en un comando directo,
 termina con el código de salida `130` sin mostrar un traceback.
 
-Esta primera versión del REPL conversa con el modelo, pero todavía no ejecuta
-herramientas ni modifica archivos.
+Esta versión del REPL conversa, carga el contexto e identifica la intención,
+pero todavía no ejecuta herramientas ni modifica archivos.
 
 ## Estado estructurado de Nox
 
@@ -379,7 +428,9 @@ nox --status
 ```
 
 La respuesta JSON contiene versión, entorno, proyecto activo, configuración,
-sesión, registro y capacidades declaradas.
+sesión, registro y capacidades declaradas. En un proyecto también informa la
+ruta esperada, cantidad, origen y tamaño de los archivos de contexto, pero
+nunca expone su contenido.
 
 Este estado es descriptivo: una sesión aparece preparada cuando existe un
 proyecto y hay un modelo configurado. No reemplaza una comprobación real de que
@@ -396,6 +447,7 @@ conexión.
 | `%LOCALAPPDATA%\Nox\state\ollama-*.lock` | Coordinación del inicio de Ollama |
 | `%LOCALAPPDATA%\Nox\logs\ollama-serve.log` | Salida de `ollama serve` cuando Nox lo inicia |
 | `<proyecto>\.nox\project.toml` | Identidad y relación padre/hijo |
+| `<proyecto>\.nox\context.md` | Contexto humano privado del proyecto |
 | `<proyecto>\.nox\config.toml` | Configuración particular del proyecto |
 | Memoria del proceso | Historial temporal de la conversación actual |
 
@@ -405,12 +457,13 @@ conexión.
 equipo. Se excluye de Git por defecto porque fue pensado como contexto privado
 del usuario.
 
-En 0.6.3 contiene identidad y configuración. Todavía no contiene instrucciones
-del proyecto, políticas, herramientas, memoria ni documentación contextual.
+En 0.7.0 contiene identidad, configuración y contexto humano del proyecto.
+Todavía no contiene herramientas, permisos, auditoría ni memoria persistente.
 
 Un `.nox` puede vivir dentro de otro `.nox`. El hijo debe declarar la identidad
 y ubicación relativa de su padre. Nox valida esa relación e informa si el
-contexto activo es `RAÍZ`, `PADRE` o `HIJO`.
+contexto activo es `RAÍZ`, `PADRE` o `HIJO`. Al conversar, compone los
+`context.md` en orden padre → hijo.
 
 ### Registro global
 
@@ -428,7 +481,7 @@ La configuración se resuelve con esta precedencia:
 local del proyecto > general del usuario > valor predeterminado
 ```
 
-Las opciones reales de 0.6.3 son:
+Las opciones reales de 0.7.0 son:
 
 - `logs.level`
 - `models.provider`
@@ -460,6 +513,10 @@ estructurado que indique:
 - Qué herramienta se ejecutó.
 - Qué resultado o error produjo.
 
+La intención detectada en 0.7.0 se usa sólo para gobernar el turno actual y no
+se conserva como auditoría. Los logs operativos tampoco reemplazan este
+registro.
+
 La auditoría debe existir antes de habilitar herramientas que modifiquen
 proyectos o controlen la computadora.
 
@@ -475,7 +532,7 @@ incorrecta o acciones no confiables.
 
 ## Seguridad e integridad existentes
 
-Aunque todavía no hay un sistema completo de permisos, 0.6.3 ya incorpora
+Aunque todavía no hay un sistema completo de permisos, 0.7.0 ya incorpora
 algunas protecciones:
 
 - Las operaciones externas destructivas piden confirmación.
@@ -486,6 +543,10 @@ algunas protecciones:
   código y sello de tiempo.
 - Los archivos de configuración se reemplazan mediante temporales únicos en el
   mismo directorio.
+- El contexto debe ser UTF-8, respeta límites de tamaño y no puede ser un
+  enlace simbólico.
+- Las respuestas de clasificación se validan contra un contrato cerrado; una
+  salida incompleta, desconocida o de baja confianza no autoriza acciones.
 - Los errores públicos utilizan códigos estables `EN0178xxx`.
 - `Ctrl+C` se transforma en una cancelación controlada.
 
@@ -502,6 +563,9 @@ una nueva versión de Nox que reconozca la nueva identidad.
 - `.nox` todavía no es un harness completo del agente.
 - El REPL conversa, pero no puede leer proyectos mediante herramientas,
   ejecutar Git, modificar archivos ni controlar la PC.
+- Cada mensaje de lenguaje natural requiere una clasificación y una respuesta;
+  en equipos modestos esta doble inferencia agrega latencia.
+- Las aclaraciones usan por ahora una pregunta segura y genérica.
 - El historial se reenvía completo en cada turno y no tiene todavía una
   ventana o compactación.
 - El estado interno puede informar que una sesión está preparada sin comprobar
@@ -513,23 +577,22 @@ una nueva versión de Nox que reconozca la nueva identidad.
 
 ## Roadmap acordado
 
-### 0.7: contexto e identificación de intenciones
+### 0.7.0: contexto e identificación de intenciones
 
-La próxima versión convertirá `.nox` en una fuente real de contexto y agregará
-la primera capacidad interna del agente: identificar qué pretende el usuario
-antes de responder o actuar.
+Esta versión convierte `.nox` en una fuente real de contexto y agrega la
+primera capacidad interna del agente: identificar qué pretende el usuario
+antes de responder.
 
-La capa de contexto deberá:
+La capa de contexto:
 
 - Reunir identidad, raíz, rol padre/hijo y configuración efectiva.
-- Incorporar instrucciones humanas específicas del proyecto mediante un
-  formato todavía por acordar.
-- Entregar una representación validada y agnóstica al resto de Nox.
+- Incorporar instrucciones humanas mediante `.nox/context.md`.
+- Componer y validar contextos anidados en orden padre → hijo.
+- Entregar una representación agnóstica al resto de Nox.
 - Mantener separado el contexto explícito de la futura memoria aprendida.
 
-El identificador de intenciones no ejecutará herramientas por sí mismo.
-Producirá una decisión estructurada y validable que permita distinguir, como
-mínimo:
+El identificador no ejecuta herramientas. Produce una decisión estructurada y
+validable que distingue:
 
 - Conversación general.
 - Consulta sobre el proyecto.
@@ -538,13 +601,14 @@ mínimo:
 - Acción sobre el sistema.
 - Solicitud ambigua que requiere aclaración.
 
-La decisión también deberá informar el ámbito, nivel de riesgo, capacidades
-necesarias y confianza. Una clasificación inválida o de baja confianza nunca
-deberá transformarse automáticamente en una acción.
+La decisión contiene sólo categoría, objetivo resumido y confianza. Esta
+limitación es intencional: el modelo no debe inventar ámbitos, riesgos,
+capacidades ni permisos. Una clasificación inválida o de baja confianza nunca
+se transforma automáticamente en una acción.
 
-Los comandos explícitos del CLI y los comandos `/` del REPL seguirán siendo
-deterministas. El clasificador se utilizará para lenguaje natural, mediante un
-contrato propio de Nox que no dependa del proveedor elegido.
+Los comandos explícitos del CLI y los comandos `/` del REPL siguen siendo
+deterministas. El clasificador se usa sólo para lenguaje natural y depende de
+un contrato de Nox, no de detalles propios de Ollama.
 
 ### Después de 0.7
 
@@ -561,6 +625,22 @@ El orden previsto es:
 El desarrollo de un modelo propio, su fine-tuning y su destilación es una línea
 de investigación posterior. Nox Agent debe poder avanzar y ser útil antes de
 que ese modelo exista.
+
+## Entrega de 0.7.0
+
+Esta entrega agrega:
+
+- Plantilla editable `.nox/context.md`.
+- Validación UTF-8, límites de tamaño y rechazo de enlaces simbólicos.
+- Herencia de contexto desde proyectos padre.
+- Contexto cargado en el prompt y recargable con `/clear`.
+- Contrato agnóstico para respuestas estructuradas.
+- Clasificación silenciosa mediante el modelo local configurado.
+- Aclaración segura ante baja confianza o ambigüedad.
+- Estado interno versión 2 con metadatos de contexto y nuevas capacidades.
+
+La auditoría persistente no forma parte de 0.7.0 y es la siguiente capa
+prevista antes de ejecutar herramientas.
 
 ## Cierre de 0.6.3
 

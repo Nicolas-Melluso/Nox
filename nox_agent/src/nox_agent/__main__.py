@@ -237,6 +237,10 @@ def _init_result_as_dict(result: InitResult, *, role: str) -> dict[str, object]:
         },
         "health": "healthy",
         "gitignore": result.gitignore_status,
+        "context": {
+            "path": str(context.root / ".nox" / "context.md"),
+            "status": result.context_status,
+        },
     }
 
 
@@ -251,6 +255,10 @@ def _print_init_result(result: InitResult, *, role: str) -> None:
     print(f"\nProyecto: {context.manifest.name}")
     print(f"Raíz: {context.root}")
     print(f"Configuración: {context.root / '.nox' / 'project.toml'}")
+    print(
+        f"Contexto del proyecto: {context.root / '.nox' / 'context.md'} "
+        f"({result.context_status})"
+    )
     print(f"Contexto Nox: {role}")
     if context.parent is not None:
         print(f"Proyecto padre: {context.parent.manifest.name}")

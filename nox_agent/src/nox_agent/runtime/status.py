@@ -1,12 +1,14 @@
 """Estado interno compartido por el CLI y las sesiones de Nox."""
 
 import platform
+from collections.abc import Mapping
 from pathlib import Path
 
 from nox_agent.config import ConfigurationManager
+from nox_agent.context import ProjectContextService
 from nox_agent.registry import context_role, load_registry, registry_path
 
-STATUS_SCHEMA_VERSION = 1
+STATUS_SCHEMA_VERSION = 2
 
 
 class StatusService:
@@ -22,6 +24,9 @@ class StatusService:
         provider = configuration.values["models.provider"].value
         projects = registry.get("projects")
         project_count = len(projects) if isinstance(projects, dict) else 0
+        effective_values = {
+            key: value.value for key, value in configuration.values.items()
+        }
 
         return {
             "schema_version": STATUS_SCHEMA_VERSION,
@@ -37,7 +42,11 @@ class StatusService:
                 "architecture": platform.machine(),
                 "python": platform.python_version(),
             },
-            "project": StatusService._project_status(project, registry),
+            "project": StatusService._project_status(
+                project,
+                registry,
+                effective_values,
+            ),
             "configuration": {
                 key: {
                     "value": value.value,
@@ -56,6 +65,8 @@ class StatusService:
             },
             "capabilities": [
                 "project.init",
+                "context.read",
+                "intent.classify",
                 "config.read",
                 "config.write",
                 "models.configure",
@@ -70,12 +81,22 @@ class StatusService:
         }
 
     @staticmethod
-    def _project_status(project: object, registry: dict[str, object]) -> dict[str, object]:
+    def _project_status(
+        project: object,
+        registry: dict[str, object],
+        configuration: Mapping[str, str],
+    ) -> dict[str, object]:
         from nox_agent.project import ProjectContext
 
         if not isinstance(project, ProjectContext):
             return {"initialized": False}
 
+        role = context_role(project, registry)
+        context = ProjectContextService.load(
+            project,
+            role=role,
+            configuration=configuration,
+        )
         projects = registry["projects"]
         assert isinstance(projects, dict)
         entry = projects.get(project.manifest.project_id)
@@ -96,8 +117,9 @@ class StatusService:
             "id": project.manifest.project_id,
             "name": project.manifest.name,
             "root": str(project.root),
-            "role": context_role(project, registry).lower(),
+            "role": role.lower(),
             "health": "healthy",
             "registered": registered,
             "parent": parent,
+            "context": context.metadata(),
         }

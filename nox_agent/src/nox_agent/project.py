@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
+from nox_agent.context import ProjectContextService
 from nox_agent.errors import ErrorCode, NoxErrorFactory
 from nox_agent.tools import FileManager, Validator
 
@@ -48,6 +49,7 @@ class InitResult:
     context: ProjectContext
     created: bool
     gitignore_status: str
+    context_status: str
 
 
 def initialize_project(root: Path, *, nox_version: str) -> InitResult:
@@ -64,7 +66,8 @@ def initialize_project(root: Path, *, nox_version: str) -> InitResult:
             )
         context = validate_project(project_root)
         gitignore_status = ensure_gitignore(project_root)
-        return InitResult(context, False, gitignore_status)
+        context_status = ProjectContextService.ensure_file(project_root)
+        return InitResult(context, False, gitignore_status, context_status)
 
     parent_context = find_nearest_parent(project_root)
     gitignore_status = ensure_gitignore(project_root)
@@ -102,7 +105,8 @@ def initialize_project(root: Path, *, nox_version: str) -> InitResult:
         ) from error
 
     context = validate_project(project_root)
-    return InitResult(context, True, gitignore_status)
+    context_status = ProjectContextService.ensure_file(project_root)
+    return InitResult(context, True, gitignore_status, context_status)
 
 
 def _resolve_project_root(root: Path) -> Path:

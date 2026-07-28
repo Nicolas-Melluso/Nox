@@ -1,7 +1,7 @@
 """Contrato agnóstico para proveedores de modelos."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -34,6 +34,15 @@ class ModelProvider(ABC):
         on_token: TokenHandler | None = None,
     ) -> str:
         """Genera la siguiente respuesta y opcionalmente transmite fragmentos."""
+
+    @abstractmethod
+    def generate_structured(
+        self,
+        messages: list[ChatMessage],
+        *,
+        schema: Mapping[str, object],
+    ) -> object:
+        """Genera datos estructurados según un esquema controlado por Nox."""
 
 
 class ProviderIntegration(Protocol):

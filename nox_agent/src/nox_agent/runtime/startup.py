@@ -71,6 +71,7 @@ class SessionStartup:
         self.menu.stream.write(
             "Proyecto inicializado correctamente.\n"
             f"Raíz: {result.context.root}\n"
+            f"Archivo de contexto: {result.context.root / '.nox' / 'context.md'}\n"
             f"Contexto Nox: {role}\n\n"
         )
         self.menu.stream.flush()
