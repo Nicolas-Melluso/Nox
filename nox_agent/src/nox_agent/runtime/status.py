@@ -71,6 +71,7 @@ class StatusService:
                 "config.write",
                 "models.configure",
                 "models.chat",
+                "models.prepare",
                 "models.install",
                 "models.remove",
                 "engines.install",

@@ -19,6 +19,7 @@ from nox_agent.tools import ConsoleMenu
 
 REQUEST_TIMEOUT_SECONDS = 120
 RECOMMENDED_MODEL = "qwen3:4b"
+MODEL_KEEP_ALIVE = "15m"
 logger = NoxLogs.get_logger("models.ollama")
 
 
@@ -102,6 +103,33 @@ class OllamaProvider(ModelProvider):
         self.model = model
         self.client = _OllamaClient(base_url)
 
+    def prepare(self) -> None:
+        response = self.client.json_request(
+            "POST",
+            "/api/generate",
+            {
+                **self._request_base(),
+                "stream": False,
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if not isinstance(response, dict):
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_RESPONSE_INVALID,
+                detail="Ollama no confirmó la preparación del modelo.",
+            )
+        error_message = response.get("error")
+        if isinstance(error_message, str):
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_PROVIDER_UNAVAILABLE,
+                detail=f"Ollama: {error_message}",
+            )
+        if response.get("done") is not True:
+            raise NoxErrorFactory.create(
+                ErrorCode.MODEL_RESPONSE_INVALID,
+                detail="Ollama no terminó de preparar el modelo.",
+            )
+
     def chat(
         self,
         messages: list[ChatMessage],
@@ -109,7 +137,7 @@ class OllamaProvider(ModelProvider):
         on_token: TokenHandler | None = None,
     ) -> str:
         payload: dict[str, object] = {
-            "model": self.model,
+            **self._request_base(),
             "messages": [message.to_dict() for message in messages],
             "stream": True,
         }
@@ -154,7 +182,7 @@ class OllamaProvider(ModelProvider):
         schema: Mapping[str, object],
     ) -> object:
         payload: dict[str, object] = {
-            "model": self.model,
+            **self._request_base(),
             "messages": [message.to_dict() for message in messages],
             "stream": False,
             "format": dict(schema),
@@ -195,6 +223,12 @@ class OllamaProvider(ModelProvider):
                 ErrorCode.MODEL_RESPONSE_INVALID,
                 detail=f"Ollama devolvió JSON inválido: {error}",
             ) from error
+
+    def _request_base(self) -> dict[str, object]:
+        return {
+            "model": self.model,
+            "keep_alive": MODEL_KEEP_ALIVE,
+        }
 
 
 class OllamaModelManager(ModelManager):

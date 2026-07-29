@@ -5,10 +5,10 @@ sola vez en Windows, reconoce cada espacio de trabajo mediante una carpeta
 `.nox` y utiliza proveedores de inteligencia intercambiables para conversar y,
 en el futuro, ejecutar capacidades de forma controlada.
 
-La versión actual es **Nox 0.7.0**. Ya puede preparar Ollama, administrar
-modelos, cargar contexto explícito de cada proyecto e identificar internamente
-la intención de cada mensaje antes de responder. Todavía no ejecuta
-herramientas ni controla la computadora.
+La versión actual es **Nox 0.7.1**. Además de preparar Ollama, administrar
+modelos, cargar contexto e identificar intenciones, ahora precarga el proveedor
+antes del primer turno y muestra actividad por fases con tiempo transcurrido.
+Todavía no ejecuta herramientas ni controla la computadora.
 
 ## Por qué existe
 
@@ -104,7 +104,7 @@ Los dominios principales del código son:
 - `errors.py` y `logs.py`: errores controlados y diagnóstico operativo.
 - `tools/`: utilidades compartidas del CLI.
 
-## Estado de la versión 0.7.0
+## Estado de la versión 0.7.1
 
 | Capacidad | Estado actual |
 |---|---|
@@ -118,6 +118,9 @@ Los dominios principales del código son:
 | Instalación y recuperación de Ollama | Disponible |
 | Listado, descarga, selección y eliminación de modelos | Disponible |
 | Chat local con streaming | Disponible |
+| Precarga antes de abrir el REPL | Disponible |
+| Permanencia de Ollama durante 15 minutos de actividad | Disponible |
+| Spinner por fases y segundos transcurridos | Disponible |
 | Proveedores diferentes de Ollama | Contrato preparado; no implementados |
 | Contexto humano específico del proyecto | Disponible |
 | Herencia de contexto padre → hijo | Disponible |
@@ -337,6 +340,24 @@ otra dirección:
 nox config models --ollama-url http://servidor:11434 --scope global
 ```
 
+## Rendimiento y ciclo de vida del modelo
+
+Después de validar el motor y el modelo, `nox start` crea el proveedor y llama
+internamente a `provider.prepare()` antes de abrir el REPL. Esta operación es
+agnóstica: cada proveedor decide si necesita preparación.
+
+Con Ollama, Nox envía una solicitud vacía que carga el modelo sin generar una
+pregunta, agregar mensajes al historial ni descargar contenido. Si el modelo
+ya estaba cargado, la operación termina rápidamente. Cuando el flujo de
+instalación o selección desemboca directamente en el REPL, la misma preparación
+calienta el modelo recién elegido; un comando independiente de descarga no lo
+deja cargado innecesariamente.
+
+Ollama mantiene el modelo durante 15 minutos. Cada clasificación y respuesta
+renueva ese plazo. La precarga no elimina el costo de cargar los pesos: lo
+adelanta al inicio de la sesión para que la primera pregunta se sienta más
+rápida. Mientras permanece cargado, el modelo consume RAM o VRAM.
+
 ## Iniciar una conversación
 
 Desde el directorio del proyecto:
@@ -388,16 +409,24 @@ respuesta final ni ejecuta nada. Las capacidades, los permisos y el riesgo
 nunca los decide el modelo: pertenecerán a reglas deterministas de Nox en
 versiones futuras.
 
-La conversación diferencia claramente a cada participante. Mientras el modelo
-prepara la respuesta, Nox mantiene visible un estado de actividad:
+La conversación diferencia claramente a cada participante. Nox muestra un
+spinner ASCII, la fase real y los segundos transcurridos:
+
+```text
+Nox> | Preparando el modelo local (4 s)
+```
+
+Durante cada turno, la misma línea cambia de fase:
 
 ```text
 You> Hola?
 
-Nox> Pensando...
+Nox> / Entendiendo tu pedido (2 s)
+Nox> - Preparando la respuesta (3 s)
 ```
 
-Cuando llega el primer fragmento, esa misma línea se transforma en:
+Cuando llega el primer fragmento, la actividad se limpia y comienza el
+streaming:
 
 ```text
 Nox> ¡Hola! ¿En qué puedo ayudarte?
@@ -405,11 +434,11 @@ Nox> ¡Hola! ¿En qué puedo ayudarte?
 You>
 ```
 
-`Pensando...` cubre tanto la clasificación interna como la preparación de la
-respuesta. Se reemplaza cuando llega el primer fragmento y también se limpia de
-forma controlada si la generación se cancela o falla. Como un mensaje normal
-puede requerir dos inferencias locales, el primer turno después de cargar el
-modelo puede tardar más que en 0.6.3.
+Los cuadros `|`, `/`, `-` y `\` se actualizan sobre una sola línea sin usar
+secuencias ANSI. El contador representa tiempo real, no un porcentaje
+inventado. La actividad se detiene antes del primer fragmento y se limpia ante
+una aclaración, `Ctrl+C` o un error. No forma parte del historial, los logs ni
+la futura auditoría.
 
 `Ctrl+C` se maneja como una cancelación controlada: vuelve desde los menús,
 cancela la entrada o respuesta actual dentro del REPL y, en un comando directo,
@@ -457,7 +486,7 @@ conexión.
 equipo. Se excluye de Git por defecto porque fue pensado como contexto privado
 del usuario.
 
-En 0.7.0 contiene identidad, configuración y contexto humano del proyecto.
+Desde 0.7.0 contiene identidad, configuración y contexto humano del proyecto.
 Todavía no contiene herramientas, permisos, auditoría ni memoria persistente.
 
 Un `.nox` puede vivir dentro de otro `.nox`. El hijo debe declarar la identidad
@@ -481,7 +510,7 @@ La configuración se resuelve con esta precedencia:
 local del proyecto > general del usuario > valor predeterminado
 ```
 
-Las opciones reales de 0.7.0 son:
+Las opciones reales de 0.7.1 son:
 
 - `logs.level`
 - `models.provider`
@@ -513,7 +542,7 @@ estructurado que indique:
 - Qué herramienta se ejecutó.
 - Qué resultado o error produjo.
 
-La intención detectada en 0.7.0 se usa sólo para gobernar el turno actual y no
+La intención detectada se usa sólo para gobernar el turno actual y no
 se conserva como auditoría. Los logs operativos tampoco reemplazan este
 registro.
 
@@ -532,7 +561,7 @@ incorrecta o acciones no confiables.
 
 ## Seguridad e integridad existentes
 
-Aunque todavía no hay un sistema completo de permisos, 0.7.0 ya incorpora
+Aunque todavía no hay un sistema completo de permisos, Nox ya incorpora
 algunas protecciones:
 
 - Las operaciones externas destructivas piden confirmación.
@@ -563,8 +592,8 @@ una nueva versión de Nox que reconozca la nueva identidad.
 - `.nox` todavía no es un harness completo del agente.
 - El REPL conversa, pero no puede leer proyectos mediante herramientas,
   ejecutar Git, modificar archivos ni controlar la PC.
-- Cada mensaje de lenguaje natural requiere una clasificación y una respuesta;
-  en equipos modestos esta doble inferencia agrega latencia.
+- El arranque frío todavía depende del hardware. La precarga traslada la carga
+  al inicio y mantener el modelo 15 minutos aumenta el uso de RAM o VRAM.
 - Las aclaraciones usan por ahora una pregunta segura y genérica.
 - El historial se reenvía completo en cada turno y no tiene todavía una
   ventana o compactación.
@@ -577,7 +606,7 @@ una nueva versión de Nox que reconozca la nueva identidad.
 
 ## Roadmap acordado
 
-### 0.7.0: contexto e identificación de intenciones
+### 0.7.0: contexto e identificación de intenciones — cerrada
 
 Esta versión convierte `.nox` en una fuente real de contexto y agrega la
 primera capacidad interna del agente: identificar qué pretende el usuario
@@ -610,25 +639,55 @@ Los comandos explícitos del CLI y los comandos `/` del REPL siguen siendo
 deterministas. El clasificador se usa sólo para lenguaje natural y depende de
 un contrato de Nox, no de detalles propios de Ollama.
 
-### Después de 0.7
+### 0.7.1: rendimiento y experiencia — en validación
 
-El orden previsto es:
+- Precarga agnóstica mediante `provider.prepare()`.
+- Permanencia de Ollama durante 15 minutos renovables.
+- Spinner ASCII con fases reales y segundos transcurridos.
+- Limpieza controlada ante respuesta, aclaración, error o `Ctrl+C`.
 
-1. Auditoría persistente de sesiones, intenciones, autorizaciones y acciones.
-2. Políticas de permisos y confirmaciones según riesgo.
-3. Primera herramienta de sólo lectura sobre el proyecto.
-4. Herramientas de escritura y desarrollo.
-5. Más adaptadores de proveedores.
-6. Capacidades personales y de control de la computadora.
-7. Memoria persistente, una vez que el comportamiento sea confiable.
+### 0.8: auditoría persistente
 
-El desarrollo de un modelo propio, su fine-tuning y su destilación es una línea
-de investigación posterior. Nox Agent debe poder avanzar y ser útil antes de
-que ese modelo exista.
+Registrar sesión, intención, decisión, autorización, acción, resultado y error,
+sin guardar conversaciones completas por defecto.
 
-## Entrega de 0.7.0
+### 0.9: permisos y capacidades
 
-Esta entrega agrega:
+Crear un catálogo determinista de capacidades, niveles de riesgo y
+confirmaciones. El modelo no decidirá sus propios permisos.
+
+### 0.10: primera herramienta de sólo lectura
+
+Listar archivos, leer archivos permitidos, buscar texto y evaluar una consulta
+acotada de Git como `git status`.
+
+### 0.11: escritura y desarrollo
+
+Agregar parches, creación de archivos y comandos cuidadosamente autorizados,
+con revisión y recuperación cuando corresponda.
+
+### 0.12: más proveedores
+
+Comprobar la agnosticidad de Nox con otros motores locales o servicios
+externos.
+
+### 0.13: agente personal y control de PC
+
+Agregar aplicaciones, procesos y automatizaciones como módulos explícitos.
+
+### Después de las capas fundamentales
+
+La memoria persistente se incorporará cuando contexto, auditoría, permisos y
+herramientas sean confiables. El modelo propio, su fine-tuning y destilación
+seguirán como una línea posterior sin bloquear el avance de Nox Agent.
+
+Como opción futura, voluntaria y configurable, Nox podrá precargar el modelo
+al iniciar Windows. No forma parte de 0.7.1 porque mantendría varios GB de RAM o
+VRAM ocupados aunque el usuario no abra una sesión.
+
+## Cierre de 0.7.0
+
+Esta versión agregó:
 
 - Plantilla editable `.nox/context.md`.
 - Validación UTF-8, límites de tamaño y rechazo de enlaces simbólicos.
@@ -641,6 +700,16 @@ Esta entrega agrega:
 
 La auditoría persistente no forma parte de 0.7.0 y es la siguiente capa
 prevista antes de ejecutar herramientas.
+
+## Entrega de 0.7.1
+
+Esta entrega agrega:
+
+- Ciclo de preparación compartido por todos los proveedores.
+- Precarga vacía y privada de Ollama antes del REPL.
+- Renovación de `keep_alive` durante clasificación y conversación.
+- Spinner y contador sin ANSI ni nuevas dependencias.
+- Fases visibles de preparación, interpretación y respuesta.
 
 ## Cierre de 0.6.3
 

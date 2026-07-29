@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import ctypes
 import msvcrt
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from ctypes import wintypes
+from threading import Event, Lock, Thread
+from types import TracebackType
 from typing import TextIO
 
 CLEAR_SCREEN = "\x1b[2J\x1b[H"
 ENABLE_PROCESSED_OUTPUT = 0x0001
 ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+ACTIVITY_FRAMES = ("|", "/", "-", "\\")
+ACTIVITY_INITIAL_DELAY_SECONDS = 0.25
+ACTIVITY_INTERVAL_SECONDS = 0.15
 
 
 class _Coord(ctypes.Structure):
@@ -83,6 +89,116 @@ _KERNEL32.SetConsoleCursorInfo.argtypes = [
     ctypes.POINTER(_ConsoleCursorInfo),
 ]
 _KERNEL32.SetConsoleCursorInfo.restype = wintypes.BOOL
+
+
+class TerminalActivity:
+    """Muestra una fase animada sin depender de secuencias ANSI."""
+
+    def __init__(
+        self,
+        stream: TextIO,
+        *,
+        prefix: str,
+        phase: str,
+    ) -> None:
+        self.stream = stream
+        self.prefix = prefix
+        self._phase = phase
+        self._stop_event = Event()
+        self._lock = Lock()
+        self._thread: Thread | None = None
+        self._started_at = 0.0
+        self._started = False
+        self._finished = False
+        self._displayed = False
+        self._last_width = 0
+        self._interactive = self._is_interactive(stream)
+
+    def __enter__(self) -> TerminalActivity:
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None,
+        exception: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.finish()
+
+    def start(self) -> None:
+        thread: Thread | None = None
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+            self._started_at = time.monotonic()
+            if not self._interactive:
+                return
+            thread = Thread(
+                target=self._animate,
+                name="nox-terminal-activity",
+                daemon=True,
+            )
+            self._thread = thread
+        if thread is not None:
+            thread.start()
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            if not self._finished:
+                self._phase = phase
+
+    def finish(self, replacement: str = "") -> None:
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join()
+
+        with self._lock:
+            if self._finished:
+                return
+            self._finished = True
+            if self._displayed:
+                self.stream.write(f"\r{' ' * self._last_width}\r")
+            if replacement:
+                self.stream.write(replacement)
+            self.stream.flush()
+
+    def _animate(self) -> None:
+        if self._stop_event.wait(ACTIVITY_INITIAL_DELAY_SECONDS):
+            return
+
+        frame_index = 0
+        while not self._stop_event.is_set():
+            try:
+                with self._lock:
+                    if self._finished:
+                        return
+                    elapsed = int(time.monotonic() - self._started_at)
+                    shown = (
+                        f"{self.prefix}{ACTIVITY_FRAMES[frame_index]} "
+                        f"{self._phase} ({elapsed} s)"
+                    )
+                    padding = " " * max(0, self._last_width - len(shown))
+                    self.stream.write(f"\r{shown}{padding}")
+                    self.stream.flush()
+                    self._displayed = True
+                    self._last_width = max(self._last_width, len(shown))
+            except (OSError, ValueError):
+                self._stop_event.set()
+                return
+
+            frame_index = (frame_index + 1) % len(ACTIVITY_FRAMES)
+            if self._stop_event.wait(ACTIVITY_INTERVAL_SECONDS):
+                return
+
+    @staticmethod
+    def _is_interactive(stream: TextIO) -> bool:
+        try:
+            return stream.isatty()
+        except (AttributeError, OSError, ValueError):
+            return False
 
 
 class TerminalDisplay:

@@ -26,6 +26,10 @@ class ModelProvider(ABC):
     name: str
     model: str
 
+    def prepare(self) -> None:
+        """Prepara el proveedor para reducir la latencia del primer turno."""
+        return None
+
     @abstractmethod
     def chat(
         self,

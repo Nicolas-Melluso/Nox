@@ -14,11 +14,10 @@ from nox_agent.registry import context_role, load_registry
 from nox_agent.runtime.intent import IntentClassifier, IntentDecision
 from nox_agent.runtime.startup import SessionStartup
 from nox_agent.runtime.status import StatusService
-from nox_agent.tools import ConsoleMenu
+from nox_agent.tools import ConsoleMenu, TerminalActivity
 
 USER_PROMPT = "You> "
 NOX_PROMPT = "Nox> "
-THINKING_PROMPT = f"{NOX_PROMPT}Pensando..."
 MAX_PENDING_CLARIFICATIONS = 4
 
 
@@ -68,6 +67,8 @@ class ReplSession:
             key: value.value for key, value in configuration.values.items()
         }
         self.provider = ProviderFactory.create(configuration)
+        if not self._prepare_provider():
+            return 130
         self.intent_classifier = IntentClassifier(self.provider)
         self._reset_history()
         self._print_banner()
@@ -92,6 +93,22 @@ class ReplSession:
                 continue
             self._respond(text)
 
+    def _prepare_provider(self) -> bool:
+        assert self.provider is not None
+        self._write("\n")
+        with TerminalActivity(
+            self.output,
+            prefix=NOX_PROMPT,
+            phase="Preparando el modelo local",
+        ) as activity:
+            try:
+                self.provider.prepare()
+            except KeyboardInterrupt:
+                activity.finish(f"{NOX_PROMPT}Preparación cancelada.")
+                self._write("\n")
+                return False
+        return True
+
     def _respond(self, text: str) -> None:
         if (
             self.provider is None
@@ -108,6 +125,23 @@ class ReplSession:
             self._write(f"{error.format_for_cli()}\n")
             return
 
+        self._write("\n")
+        with TerminalActivity(
+            self.output,
+            prefix=NOX_PROMPT,
+            phase="Entendiendo tu pedido",
+        ) as activity:
+            self._respond_with_activity(text, activity)
+
+    def _respond_with_activity(
+        self,
+        text: str,
+        activity: TerminalActivity,
+    ) -> None:
+        assert self.provider is not None
+        assert self.context is not None
+        assert self.intent_classifier is not None
+
         answer_started = False
         pending_tokens: list[str] = []
 
@@ -119,14 +153,13 @@ class ReplSession:
                 pending_tokens.append(token)
                 if not any(part.strip() for part in pending_tokens):
                     return
-                self._replace_thinking(NOX_PROMPT)
+                activity.finish(NOX_PROMPT)
                 answer_started = True
                 self._write_token("".join(pending_tokens))
                 pending_tokens.clear()
                 return
             self._write_token(token)
 
-        self._write(f"\n{THINKING_PROMPT}")
         pending_clarifications = list(self.pending_clarifications)
         if self.pending_request is not None:
             pending_clarifications.append(text)
@@ -147,17 +180,16 @@ class ReplSession:
             self._finish_interrupted_response(
                 "Respuesta cancelada.",
                 answer_started=False,
+                activity=activity,
             )
             return
         except NoxError as error:
             self._finish_interrupted_response(
                 error.format_for_cli(),
                 answer_started=False,
+                activity=activity,
             )
             return
-        except Exception:
-            self._replace_thinking("")
-            raise
 
         if decision.needs_clarification:
             if self.pending_request is None:
@@ -165,7 +197,7 @@ class ReplSession:
                 self.pending_clarifications = []
             else:
                 self.pending_clarifications = pending_clarifications
-            self._replace_thinking(f"{NOX_PROMPT}{decision.question()}")
+            activity.finish(f"{NOX_PROMPT}{decision.question()}")
             self._write("\n\n")
             return
 
@@ -173,6 +205,7 @@ class ReplSession:
             self.pending_clarifications = pending_clarifications
         self.history.append(ChatMessage("user", classified_text))
         messages = self._messages_for_response(decision)
+        activity.set_phase("Preparando la respuesta")
         try:
             answer = self.provider.chat(messages, on_token=show_token)
         except KeyboardInterrupt:
@@ -180,6 +213,7 @@ class ReplSession:
             self._finish_interrupted_response(
                 "Respuesta cancelada.",
                 answer_started=answer_started,
+                activity=activity,
             )
             return
         except NoxError as error:
@@ -187,17 +221,16 @@ class ReplSession:
             self._finish_interrupted_response(
                 error.format_for_cli(),
                 answer_started=answer_started,
+                activity=activity,
             )
             return
         except Exception:
             self.history.pop()
             if answer_started:
                 self._write("\n")
-            else:
-                self._replace_thinking("")
             raise
         if not answer_started:
-            self._replace_thinking(f"{NOX_PROMPT}{answer}")
+            activity.finish(f"{NOX_PROMPT}{answer}")
         self.history.append(ChatMessage("assistant", answer))
         self.pending_request = None
         self.pending_clarifications = []
@@ -229,20 +262,18 @@ class ReplSession:
         )
         return "\n\n".join(sections)
 
-    def _replace_thinking(self, replacement: str) -> None:
-        self._write(f"\r{' ' * len(THINKING_PROMPT)}\r{replacement}")
-
     def _finish_interrupted_response(
         self,
         message: str,
         *,
         answer_started: bool,
+        activity: TerminalActivity,
     ) -> None:
         shown = f"{NOX_PROMPT}{message}"
         if answer_started:
             self._write(f"\n\n{shown}\n\n")
         else:
-            self._replace_thinking(shown)
+            activity.finish(shown)
             self._write("\n\n")
 
     def _run_internal_command(self, command: str) -> bool:
