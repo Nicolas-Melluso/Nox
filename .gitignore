@@ -3,3 +3,4 @@
 /nox_agent/build/
 /nox_agent/dist/
 /nox_agent/src/*.egg-info/
+/test
