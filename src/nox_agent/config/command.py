@@ -162,7 +162,7 @@ def _run_logs(
     if arguments.log_level and scope is not None:
         value = manager.set("logs.level", arguments.log_level, scope)
         saved_path = manager.path_for_scope(scope)
-        NoxLogs.configure(LogLevel(value))
+        NoxLogs.set_level(LogLevel(value))
 
     effective = manager.effective().values["logs.level"]
     data: dict[str, object] = {

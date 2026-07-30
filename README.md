@@ -5,9 +5,9 @@ sola vez en Windows, reconoce cada espacio de trabajo mediante una carpeta
 `.nox` y utiliza proveedores de inteligencia intercambiables para conversar y,
 en el futuro, ejecutar capacidades de forma controlada.
 
-La versión actual es **Nox 0.7.1**. Además de preparar Ollama, administrar
-modelos, cargar contexto e identificar intenciones, ahora precarga el proveedor
-antes del primer turno y muestra actividad por fases con tiempo transcurrido.
+La versión actual en desarrollo es **Nox 0.8.1**. Además de preparar Ollama,
+administrar modelos, cargar contexto e identificar intenciones, incorpora una
+capa persistente de observabilidad: auditoría, transcripción, métricas y logs.
 Todavía no ejecuta herramientas ni controla la computadora.
 
 ## Por qué existe
@@ -81,6 +81,13 @@ nox / CLI
 │   ├── estado interno
 │   ├── identificación estructurada de intenciones
 │   └── REPL conversacional
+├── audit
+│   ├── eventos y sesiones JSONL
+│   ├── índice SQLite reconstruible
+│   └── búsqueda y preguntas RAG
+├── feature_flags
+│   ├── valores de fábrica en YAML
+│   └── configuración general y por proyecto
 └── tools
     ├── menús y terminal
     ├── confirmaciones
@@ -101,10 +108,12 @@ Los dominios principales del código son:
 - `engines/`: instalación, detección e inicio del software que ejecuta modelos.
 - `models/`: contratos de proveedores, administración de modelos e inferencia.
 - `runtime/`: preparación, estado y conversación.
+- `audit/`: eventos, persistencia, índice, consulta y RAG de auditoría.
+- `feature_flags/`: catálogo y resolución de funcionalidades observables.
 - `errors.py` y `logs.py`: errores controlados y diagnóstico operativo.
 - `tools/`: utilidades compartidas del CLI.
 
-## Estado de la versión 0.7.1
+## Estado de la versión 0.8.1
 
 | Capacidad | Estado actual |
 |---|---|
@@ -125,8 +134,14 @@ Los dominios principales del código son:
 | Contexto humano específico del proyecto | Disponible |
 | Herencia de contexto padre → hijo | Disponible |
 | Identificación estructurada de intenciones | Disponible internamente |
+| Sesiones de auditoría en JSONL | Disponible |
+| Índice consultable `audit.db` | Disponible |
+| Búsqueda tokenizada de eventos | Disponible |
+| Preguntas RAG sobre auditoría | Disponible |
+| Transcripción y métricas de rendimiento | Disponibles y configurables |
+| Retención automática de 24 horas | Disponible y configurable |
 | Herramientas ejecutables por el agente | No implementadas |
-| Permisos y auditoría persistente | No implementados |
+| Permisos deterministas | No implementados |
 | Memoria persistente | No implementada |
 | Modelo propio, fine-tuning y destilación | Investigación futura |
 
@@ -151,6 +166,14 @@ La fábrica actual utiliza:
 - CPython 3.14.6 x64.
 - Un entorno virtual en `.venv`.
 - cx-Freeze 8.6.4.
+- PyYAML 6.0.3 para leer feature flags con un cargador seguro.
+
+Las versiones están fijadas en `pyproject.toml`. Para preparar o actualizar el
+entorno de fábrica:
+
+```powershell
+python -m pip install -e ".[build]"
+```
 
 ### Activar el entorno local
 
@@ -374,8 +397,10 @@ La inicialización y el registro se realizan una sola vez. Si Ollama está
 instalado pero detenido, Nox permite iniciarlo y reintentar la conexión; para
 un endpoint remoto solamente ofrece reintentar, sin iniciar procesos locales.
 
-La sesión conserva el historial solamente en memoria. Sus comandos internos
-son:
+El historial que el modelo usa para conversar vive solamente en memoria. Si la
+transcripción está habilitada, una copia de los mensajes visibles se conserva
+como observabilidad, pero no se vuelve a cargar como memoria del agente. Los
+comandos internos son:
 
 ```text
 /help o /ayuda       Muestra la ayuda
@@ -438,7 +463,8 @@ Los cuadros `|`, `/`, `-` y `\` se actualizan sobre una sola línea sin usar
 secuencias ANSI. El contador representa tiempo real, no un porcentaje
 inventado. La actividad se detiene antes del primer fragmento y se limpia ante
 una aclaración, `Ctrl+C` o un error. No forma parte del historial, los logs ni
-la futura auditoría.
+la auditoría: solamente se guardan las fases y sus duraciones, no cada cuadro
+del spinner.
 
 `Ctrl+C` se maneja como una cancelación controlada: vuelve desde los menús,
 cancela la entrada o respuesta actual dentro del REPL y, en un comando directo,
@@ -474,10 +500,15 @@ conexión.
 | `%LOCALAPPDATA%\Nox\config.toml` | Configuración general del usuario |
 | `%LOCALAPPDATA%\Nox\state\projects.json` | Registro de proyectos conocidos |
 | `%LOCALAPPDATA%\Nox\state\ollama-*.lock` | Coordinación del inicio de Ollama |
+| `%LOCALAPPDATA%\Nox\feature_flags.yaml` | Feature flags generales del usuario |
+| `%LOCALAPPDATA%\Nox\audit\sessions\*.jsonl` | Fuente canónica de sesiones y eventos |
+| `%LOCALAPPDATA%\Nox\audit\audit.db` | Índice SQLite reconstruible para consultas |
+| `%LOCALAPPDATA%\Nox\logs\nox.log` | Diagnósticos persistentes de Nox |
 | `%LOCALAPPDATA%\Nox\logs\ollama-serve.log` | Salida de `ollama serve` cuando Nox lo inicia |
 | `<proyecto>\.nox\project.toml` | Identidad y relación padre/hijo |
 | `<proyecto>\.nox\context.md` | Contexto humano privado del proyecto |
 | `<proyecto>\.nox\config.toml` | Configuración particular del proyecto |
+| `<proyecto>\.nox\feature_flags.yaml` | Feature flags particulares del proyecto |
 | Memoria del proceso | Historial temporal de la conversación actual |
 
 ### Qué representa `.nox`
@@ -510,7 +541,7 @@ La configuración se resuelve con esta precedencia:
 local del proyecto > general del usuario > valor predeterminado
 ```
 
-Las opciones reales de 0.7.1 son:
+Las opciones generales de configuración son:
 
 - `logs.level`
 - `models.provider`
@@ -520,34 +551,134 @@ Las opciones reales de 0.7.1 son:
 `Memory` y `Security` sólo aparecen como secciones futuras y no tienen
 comportamiento.
 
-## Logs, auditoría y memoria
+Los feature flags tienen su propio YAML y la misma precedencia:
 
-Son tres conceptos diferentes:
+```text
+local del proyecto > general del usuario > valor de fábrica
+```
 
-### Logs operativos
+Se administran sin agregar opciones al menú visual:
 
-Ya existe una capa de logs y se puede elegir su nivel. Actualmente usa la
-salida de la terminal para diagnósticos. Cuando Nox inicia directamente
-`ollama serve`, la salida de ese proceso puede guardarse en
-`%LOCALAPPDATA%\Nox\logs\ollama-serve.log`.
+```powershell
+nox flags list
+nox flags actual
+nox flags get audit.level
+nox flags set audit.level full --scope global
+nox flags set transcription.enabled false --scope local
+nox flags unset transcription.enabled --scope local
+```
+
+Un feature flag habilita o configura una ruta de código; nunca concede permisos
+al modelo. Los permisos deterministas pertenecen a la versión 0.9.
+
+## Auditoría, transcripción, métricas, logs y memoria
+
+Son capas diferentes. Los registros administrados por esta capa usan la misma
+cantidad de horas como referencia de retención; la salida propia de
+`ollama serve` conserva por ahora su archivo operativo separado.
 
 ### Auditoría
 
-Todavía no existe una auditoría persistente. Nox no guarda un historial
-estructurado que indique:
+La auditoría guarda hechos estructurados: inicio y final de sesión, intención,
+decisión, cancelación, resultado y error. Cada evento se escribe primero como
+una línea JSON independiente dentro de
+`%LOCALAPPDATA%\Nox\audit\sessions`. Esa carpeta se llama `sessions` porque
+cada archivo representa una sesión real de Nox.
 
-- Qué intención detectó.
-- Qué capacidad solicitó el modelo.
-- Qué autorizó o rechazó el usuario.
-- Qué herramienta se ejecutó.
-- Qué resultado o error produjo.
+`audit.db` no reemplaza esos JSONL. Es un índice SQLite derivado que Nox puede
+reconstruir si se borra o queda desactualizado. Sirve para consultar sin tener
+que abrir y recorrer cada archivo manualmente.
 
-La intención detectada se usa sólo para gobernar el turno actual y no
-se conserva como auditoría. Los logs operativos tampoco reemplazan este
-registro.
+Los archivos `.jsonl` se pueden abrir directamente con VS Code o un editor de
+texto: cada línea es un evento completo. `audit.db` es binario; para leerlo se
+usa el CLI de Nox o, de forma opcional, cualquier visor de SQLite.
 
-La auditoría debe existir antes de habilitar herramientas que modifiquen
-proyectos o controlen la computadora.
+Comandos de inspección:
+
+```powershell
+nox audit status
+nox audit list
+nox audit show <session-id>
+nox audit search "texto a buscar"
+nox audit ask "¿qué errores ocurrieron al preparar el modelo?"
+nox audit clear --all
+```
+
+`search` usa el índice FTS5 de SQLite, que tokeniza el contenido para buscar
+palabras y tolerar diferencias de mayúsculas y acentos. `ask` agrega la capa
+generativa: expande la consulta, recupera evidencia y pide una respuesta al
+proveedor configurado de Nox. Nox le pide citar identificadores de eventos y,
+con o sin citas generadas, después muestra todas las coincidencias recuperadas
+una detrás de otra. Si no existe evidencia, informa que no encontró
+coincidencias y no inventa una respuesta.
+
+Hoy el único proveedor implementado es Ollama local. Antes de agregar un
+proveedor remoto habrá que incorporar una decisión explícita de privacidad,
+porque `audit ask` le entrega una selección de eventos para producir la
+respuesta.
+
+Esta primera versión es un RAG textual local. Todavía no crea embeddings ni un
+índice vectorial. El concepto de convertir textos en vectores se llama
+**vectorización**; no es lo mismo que cuantizar un modelo. Podrá sumarse para
+búsqueda semántica cuando decidamos qué modelo de embeddings usar, cuánto ocupa
+y si sus datos pueden salir del equipo.
+
+### Transcripción
+
+La transcripción conserva los mensajes visibles que escribe el usuario y
+responde Nox dentro del REPL. En el perfil de desarrollo está habilitada para
+poder revisar el comportamiento conversacional completo. No guarda el prompt
+del sistema, el contenido interno de `context.md`, razonamientos internos ni
+un evento por cada token.
+
+La navegación del menú inicial y los pasos guiados anteriores a la apertura
+del REPL todavía no se transcriben uno por uno. Sí se auditan los comandos
+directos del CLI y, una vez iniciada la sesión conversacional, sus mensajes,
+intenciones, resultados, cancelaciones y errores.
+
+En los comandos directos se conserva la invocación, el resultado y el error,
+pero no una copia byte por byte de todo lo impreso en la terminal. Los propios
+comandos `nox audit ...` no crean otra sesión de auditoría: consultar o limpiar
+la evidencia no debe modificar al mismo tiempo aquello que se está
+inspeccionando.
+
+### Métricas
+
+Las métricas usan un reloj monotónico y registran tiempos como preparación del
+proveedor, clasificación, primer contenido visible, generación y duración
+total del turno. La estructura ya reserva identificadores de operación y modo
+de ejecución para futuras tareas en segundo plano.
+
+### Logs operativos
+
+Los logs sirven para diagnóstico técnico y mantienen su nivel configurable.
+Además de la terminal, pueden persistirse en
+`%LOCALAPPDATA%\Nox\logs\nox.log`. Cuando Nox inicia directamente
+`ollama serve`, la salida de ese proceso continúa en su archivo específico.
+
+### Retención y detalle
+
+Durante el desarrollo los cuatro registros están habilitados y la auditoría
+usa nivel `full`. La retención predeterminada es de 24 horas. Nox elimina
+sesiones vencidas al iniciar o consultar la auditoría y protege las sesiones
+que continúan activas.
+
+La limpieza es perezosa: se ejecuta cuando Nox vuelve a registrar o consultar
+la auditoría, no mediante un servicio permanente que despierte exactamente al
+cumplirse la hora. La rotación horaria de logs también puede conservar el
+archivo actual además de los archivos rotados del período.
+
+Los valores se pueden revisar y cambiar con `nox flags`. Los niveles de
+auditoría son `off`, `metadata`, `activity` y `full`. Aunque se use `full`, Nox
+redacta claves típicas de credenciales y nunca intenta guardar razonamiento
+interno.
+
+El perfil `development` es por ahora el único perfil definido y también viaja
+en los MSI de prueba. Antes de una distribución pública habrá que definir un
+perfil más privado; por ejemplo, auditoría `activity` y transcripción
+desactivada de fábrica. En `full`, un secreto escrito como texto normal dentro
+de una conversación puede quedar transcripto hasta que venza la retención, por
+lo que no debe considerarse un gestor de secretos.
 
 ### Memoria
 
@@ -600,6 +731,15 @@ una nueva versión de Nox que reconozca la nueva identidad.
 - El estado interno puede informar que una sesión está preparada sin comprobar
   que Ollama esté respondiendo.
 - El registro puede conservar proyectos que ya no existen.
+- La navegación del menú inicial y los asistentes de instalación/configuración
+  todavía no generan un evento por cada selección; la auditoría detallada
+  comienza con los comandos directos o con el REPL ya preparado.
+- Los comandos directos todavía no transcriben toda su salida de terminal y
+  los comandos `nox audit ...` se excluyen deliberadamente para no contaminar
+  la evidencia consultada.
+- Todavía no existe un perfil de distribución distinto de `development`; los
+  MSI actuales son artefactos de prueba y conservan el nivel `full` por
+  defecto.
 - No hay una suite permanente de pruebas dentro del repositorio; las
   validaciones de esta etapa fueron manuales y temporales.
 - La desinstalación profunda de datos generales y `.nox` sigue pendiente.
@@ -639,17 +779,21 @@ Los comandos explícitos del CLI y los comandos `/` del REPL siguen siendo
 deterministas. El clasificador se usa sólo para lenguaje natural y depende de
 un contrato de Nox, no de detalles propios de Ollama.
 
-### 0.7.1: rendimiento y experiencia — en validación
+### 0.7.1: rendimiento y experiencia — cerrada
 
 - Precarga agnóstica mediante `provider.prepare()`.
 - Permanencia de Ollama durante 15 minutos renovables.
 - Spinner ASCII con fases reales y segundos transcurridos.
 - Limpieza controlada ante respuesta, aclaración, error o `Ctrl+C`.
 
-### 0.8: auditoría persistente
+### 0.8: observabilidad persistente — en desarrollo
 
-Registrar sesión, intención, decisión, autorización, acción, resultado y error,
-sin guardar conversaciones completas por defecto.
+- Sesiones y eventos canónicos en JSONL.
+- Índice SQLite reconstruible y búsqueda FTS.
+- RAG interno para preguntar sobre la auditoría.
+- Transcripción, métricas y logs como capas separadas.
+- Feature flags globales y locales en YAML.
+- Retención predeterminada de 24 horas.
 
 ### 0.9: permisos y capacidades
 
@@ -682,7 +826,7 @@ herramientas sean confiables. El modelo propio, su fine-tuning y destilación
 seguirán como una línea posterior sin bloquear el avance de Nox Agent.
 
 Como opción futura, voluntaria y configurable, Nox podrá precargar el modelo
-al iniciar Windows. No forma parte de 0.7.1 porque mantendría varios GB de RAM o
+al iniciar Windows. No forma parte de 0.8.1 porque mantendría varios GB de RAM o
 VRAM ocupados aunque el usuario no abra una sesión.
 
 ## Cierre de 0.7.0
@@ -700,6 +844,42 @@ Esta versión agregó:
 
 La auditoría persistente no forma parte de 0.7.0 y es la siguiente capa
 prevista antes de ejecutar herramientas.
+
+## Entrega de 0.8.1
+
+Esta corrección evita que una conversación quede atrapada en un ciclo de
+aclaraciones:
+
+- El clasificador recibe por separado el mensaje actual, el pedido pendiente y
+  las aclaraciones anteriores.
+- Cada turno declara si responde al pedido pendiente, inicia uno nuevo o sigue
+  siendo ambiguo.
+- Una respuesta que resuelve el pedido se combina una sola vez con su contexto
+  y después limpia el estado pendiente.
+- Dos aclaraciones consecutivas que no resuelven el pedido cierran ese estado y
+  permiten comenzar de nuevo.
+- La relación entre pedidos queda registrada en la auditoría de intención.
+
+Los comandos internos del REPL y el RAG de auditoría no cambian en esta
+versión.
+
+## Entrega de 0.8.0
+
+Esta entrega agrega:
+
+- Feature flags validados desde YAML, con valores de fábrica y overrides
+  generales o locales.
+- Un evento común con identificadores de sesión, interacción y operación.
+- Sesiones JSONL como fuente canónica.
+- `audit.db` como índice SQLite reconstruible con FTS5.
+- Retención automática y configurable, inicialmente de 24 horas.
+- Auditoría de comandos directos y del ciclo conversacional.
+- Transcripción opcional de mensajes completos.
+- Métricas de precarga, clasificación, primer contenido, respuesta y turno.
+- Logs persistentes con rotación horaria.
+- `nox audit status`, `list`, `show`, `search`, `ask` y `clear`.
+- RAG textual agnóstico del proveedor, con expansión de consulta, evidencia
+  limitada para el modelo y coincidencias completas para el usuario.
 
 ## Entrega de 0.7.1
 

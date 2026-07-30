@@ -1,8 +1,16 @@
 [project]
 name = "nox_agent"
-version = "0.7.1"
+version = "0.8.1"
 description = "Agente personal y de desarrollo local."
 requires-python = "==3.14.6"
+dependencies = [
+    "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+build = [
+    "cx-Freeze==8.6.4",
+]
 
 [[tool.cxfreeze.executables]]
 script = "src/nox_agent/__main__.py"
@@ -12,12 +20,15 @@ target_name = "nox"
 [tool.cxfreeze.build_exe]
 include_path = ["src"]
 include_msvcr = true
+include_files = [
+    ["src/nox_agent/feature_flags/defaults.yaml", "lib/nox_agent/feature_flags/defaults.yaml"],
+]
 
 [tool.cxfreeze.bdist_msi]
 add_to_path = true
 all_users = false
 initial_target_dir = '[LocalAppDataFolder]Programs\Nox'
-output_name = "Nox-0.7.1-windows-x64.msi"
+output_name = "Nox-0.8.1-windows-x64.msi"
 product_name = "Nox"
-product_version = "0.7.1"
+product_version = "0.8.1"
 upgrade_code = "{4BDE50F9-A36C-4E4F-B614-33BFC6BE9E04}"

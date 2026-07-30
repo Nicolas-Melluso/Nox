@@ -166,6 +166,30 @@ class ErrorCode(StrEnum):
         "EN0178037",
         "El modelo no devolvió una intención válida.",
     )
+    FEATURE_FLAGS_INVALID = (
+        "EN0178038",
+        "La configuración de funcionalidades de Nox no es válida.",
+    )
+    FEATURE_FLAG_UNKNOWN = (
+        "EN0178039",
+        "La funcionalidad solicitada no existe.",
+    )
+    AUDIT_STORAGE_UNAVAILABLE = (
+        "EN0178040",
+        "Nox no pudo acceder al almacenamiento de auditoría.",
+    )
+    AUDIT_SCHEMA_INVALID = (
+        "EN0178041",
+        "El esquema de auditoría no es válido o no es compatible.",
+    )
+    AUDIT_SESSION_NOT_FOUND = (
+        "EN0178042",
+        "La sesión de auditoría solicitada no existe.",
+    )
+    AUDIT_QUERY_INVALID = (
+        "EN0178043",
+        "La consulta de auditoría no es válida.",
+    )
 
 
 class NoxError(Exception):

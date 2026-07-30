@@ -8,11 +8,15 @@ import sys
 from pathlib import Path
 
 from nox_agent import __version__  # type: ignore
+from nox_agent.audit.command import configure_audit_parser, run_audit
+from nox_agent.audit.command_session import CommandAuditSession
 from nox_agent.config import ConfigurationManager
 from nox_agent.config.command import configure_config_parser, run_config
 from nox_agent.config.menu import ConfigurationMenu
 from nox_agent.errors import ErrorCode, NoxError, NoxErrorFactory
 from nox_agent.engines.command import configure_engines_parser, run_engines
+from nox_agent.feature_flags import FeatureFlagManager
+from nox_agent.feature_flags.command import configure_flags_parser, run_flags
 from nox_agent.logs import LogLevel, NoxLogs
 from nox_agent.models.command import configure_models_parser, run_models
 from nox_agent.models.setup import LocalIntelligenceSetup
@@ -60,6 +64,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure_config_parser(subparsers)
     configure_engines_parser(subparsers)
     configure_models_parser(subparsers)
+    configure_audit_parser(subparsers)
+    configure_flags_parser(subparsers)
     return parser
 
 
@@ -95,41 +101,35 @@ def main(argv: list[str] | None = None) -> int:
     ):
         parser.print_help()
         return 0
+    command_audit: CommandAuditSession | None = None
     try:
-        _configure_effective_logs(Path.cwd())
-        if arguments.command is None:
-            return _run_home()
-        if arguments.command == "init":
-            return _run_init(output_json=arguments.json)
-        if arguments.command == "config":
-            return run_config(
-                arguments,
-                start=Path.cwd(),
-                emit_json=_print_json,
-            )
-        if arguments.command == "start":
-            if arguments.json:
-                raise NoxErrorFactory.create(
-                    ErrorCode.CONFIG_INVALID,
-                    detail="nox start es interactivo y no admite --json.",
-                )
-            return ReplSession(Path.cwd(), nox_version=__version__).run()
-        if arguments.command == "engines":
-            return run_engines(arguments, emit_json=_print_json)
-        if arguments.command == "models":
-            return run_models(
-                arguments,
-                start=Path.cwd(),
-                emit_json=_print_json,
-            )
+        _configure_effective_logs(Path.cwd(), output_json=arguments.json)
+        command_audit = _start_command_audit(arguments)
+        result = _dispatch(arguments)
+        if command_audit is not None:
+            audit_to_finish, command_audit = command_audit, None
+            audit_to_finish.complete(result)
+        return result
     except KeyboardInterrupt:
         cancelled = NoxErrorFactory.create(ErrorCode.OPERATION_CANCELLED)
+        if command_audit is not None:
+            command_audit.fail(
+                outcome="cancelled",
+                exit_code=130,
+                error_code=str(cancelled.code),
+            )
         if arguments.json:
             _print_json(_command_identifier(arguments), None, error=cancelled)
         else:
             print(f"\n{cancelled.format_for_cli()}", file=sys.stderr)
         return 130
     except NoxError as error:
+        if command_audit is not None:
+            command_audit.fail(
+                outcome="error",
+                exit_code=1,
+                error_code=str(error.code),
+            )
         if arguments.json:
             _print_json(_command_identifier(arguments), None, error=error)
         else:
@@ -141,11 +141,57 @@ def main(argv: list[str] | None = None) -> int:
             ErrorCode.UNKNOWN_CRITICAL,
             detail=f"{type(error).__name__}: {error}",
         )
+        if command_audit is not None:
+            command_audit.fail(
+                outcome="error",
+                exit_code=2,
+                error_code=str(critical.code),
+            )
         if arguments.json:
             _print_json(_command_identifier(arguments), None, error=critical)
         else:
             print(critical.format_for_cli(), file=sys.stderr)
         return 2
+
+
+def _dispatch(arguments: argparse.Namespace) -> int:
+    if arguments.command is None:
+        return _run_home()
+    if arguments.command == "init":
+        return _run_init(output_json=arguments.json)
+    if arguments.command == "config":
+        return run_config(
+            arguments,
+            start=Path.cwd(),
+            emit_json=_print_json,
+        )
+    if arguments.command == "start":
+        if arguments.json:
+            raise NoxErrorFactory.create(
+                ErrorCode.CONFIG_INVALID,
+                detail="nox start es interactivo y no admite --json.",
+            )
+        return ReplSession(Path.cwd(), nox_version=__version__).run()
+    if arguments.command == "engines":
+        return run_engines(arguments, emit_json=_print_json)
+    if arguments.command == "models":
+        return run_models(
+            arguments,
+            start=Path.cwd(),
+            emit_json=_print_json,
+        )
+    if arguments.command == "audit":
+        return run_audit(
+            arguments,
+            start=Path.cwd(),
+            emit_json=_print_json,
+        )
+    if arguments.command == "flags":
+        return run_flags(
+            arguments,
+            start=Path.cwd(),
+            emit_json=_print_json,
+        )
     return 0
 
 
@@ -189,6 +235,8 @@ def _run_home() -> int:
                     "nox init · Inicializar el proyecto actual",
                     "nox models · Preparar y administrar modelos",
                     "nox --config · Configurar Nox",
+                    "nox audit · Consultar la auditoría",
+                    "nox flags · Consultar funcionalidades avanzadas",
                     "nox --help · Ver toda la ayuda técnica",
                 ],
             )
@@ -206,9 +254,16 @@ def _run_init(*, output_json: bool) -> int:
     return 0
 
 
-def _configure_effective_logs(start: Path) -> None:
+def _configure_effective_logs(start: Path, *, output_json: bool) -> None:
     configuration = ConfigurationManager(start).effective()
-    NoxLogs.configure(LogLevel(configuration.values["logs.level"].value))
+    features = FeatureFlagManager(start).effective()
+    NoxLogs.configure(
+        LogLevel(configuration.values["logs.level"].value),
+        enabled=bool(features.get("logs.enabled")),
+        console=not output_json,
+        persistent=bool(features.get("logs.persistent")),
+        retention_hours=int(features.get("audit.retention_hours")),
+    )
 
 
 def _print_status() -> None:
@@ -290,13 +345,31 @@ def _normalize_argv(argv: list[str]) -> list[str]:
     return normalized
 
 
+def _start_command_audit(
+    arguments: argparse.Namespace,
+) -> CommandAuditSession | None:
+    if arguments.command in {None, "start", "audit"}:
+        return None
+    return CommandAuditSession(
+        Path.cwd(),
+        nox_version=__version__,
+        command=_command_identifier(arguments),
+        arguments=arguments,
+    )
+
+
 def _command_identifier(arguments: argparse.Namespace) -> str | None:
-    if arguments.command == "config" and arguments.config_command:
-        return f"config.{arguments.config_command}"
-    if arguments.command == "engines" and arguments.engines_command:
-        return f"engines.{arguments.engines_command}"
-    if arguments.command == "models" and arguments.models_command:
-        return f"models.{arguments.models_command}"
+    nested_attributes = {
+        "config": "config_command",
+        "engines": "engines_command",
+        "models": "models_command",
+        "audit": "audit_command",
+        "flags": "flags_command",
+    }
+    attribute = nested_attributes.get(arguments.command)
+    nested = getattr(arguments, attribute, None) if attribute else None
+    if nested:
+        return f"{arguments.command}.{nested}"
     return arguments.command
 
 

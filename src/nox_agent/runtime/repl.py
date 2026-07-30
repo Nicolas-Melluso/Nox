@@ -6,23 +6,25 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from nox_agent.audit import AuditRecorder
 from nox_agent.context import ProjectContextService, ProjectContextSnapshot
 from nox_agent.errors import ErrorCode, NoxError, NoxErrorFactory
-from nox_agent.models import ChatMessage, ModelProvider, ProviderFactory
+from nox_agent.logs import NoxLogs
+from nox_agent.models import ModelProvider, ProviderFactory
 from nox_agent.project import ProjectContext
 from nox_agent.registry import context_role, load_registry
-from nox_agent.runtime.intent import IntentClassifier, IntentDecision
+from nox_agent.runtime.conversation import ConversationRuntime, NOX_PROMPT
+from nox_agent.runtime.observability import ReplObservability
 from nox_agent.runtime.startup import SessionStartup
 from nox_agent.runtime.status import StatusService
 from nox_agent.tools import ConsoleMenu, TerminalActivity
 
 USER_PROMPT = "You> "
-NOX_PROMPT = "Nox> "
-MAX_PENDING_CLARIFICATIONS = 4
+LOGGER = NoxLogs.get_logger("runtime.repl")
 
 
 class ReplSession:
-    """Mantiene una conversación temporal dentro de un proyecto Nox."""
+    """Prepara y coordina una sesión interactiva de Nox."""
 
     def __init__(
         self,
@@ -41,11 +43,9 @@ class ReplSession:
         self.provider: ModelProvider | None = None
         self.project: ProjectContext | None = None
         self.context: ProjectContextSnapshot | None = None
-        self.intent_classifier: IntentClassifier | None = None
         self.configuration_values: dict[str, str] = {}
-        self.pending_request: str | None = None
-        self.pending_clarifications: list[str] = []
-        self.history: list[ChatMessage] = []
+        self.observability: ReplObservability | None = None
+        self.conversation: ConversationRuntime | None = None
 
     def run(self) -> int:
         if self.require_tty and (
@@ -67,34 +67,98 @@ class ReplSession:
             key: value.value for key, value in configuration.values.items()
         }
         self.provider = ProviderFactory.create(configuration)
-        if not self._prepare_provider():
-            return 130
-        self.intent_classifier = IntentClassifier(self.provider)
-        self._reset_history()
-        self._print_banner()
+        self.observability = ReplObservability(
+            AuditRecorder(
+                self.start,
+                execution_mode="interactive",
+                session_metadata={
+                    "session_type": "repl",
+                    "nox_version": self.nox_version,
+                    "project_id": self.project.manifest.project_id,
+                    "project_name": self.project.manifest.name,
+                    "project_root": self.project.root,
+                    "provider": self.provider.name,
+                    "model": self.provider.model,
+                },
+            )
+        )
 
+        outcome = "success"
+        exit_code = 0
+        error_code: str | None = None
+        try:
+            if not self._prepare_provider():
+                outcome = "cancelled"
+                exit_code = 130
+                return exit_code
+            self._reset_history()
+            assert self.context is not None
+            self.observability.session_ready(
+                self.context.role,
+                len(self.context.sources),
+            )
+            self._print_banner()
+            return self._run_loop()
+        except KeyboardInterrupt:
+            outcome = "cancelled"
+            exit_code = 130
+            error_code = str(ErrorCode.OPERATION_CANCELLED)
+            raise
+        except NoxError as error:
+            outcome = "error"
+            exit_code = 1
+            error_code = str(error.code)
+            raise
+        except Exception:
+            outcome = "error"
+            exit_code = 2
+            error_code = str(ErrorCode.UNKNOWN_CRITICAL)
+            raise
+        finally:
+            metadata: dict[str, object] = {"exit_code": exit_code}
+            if error_code is not None:
+                metadata["error_code"] = error_code
+            self._close_observability(outcome, metadata)
+
+    def _run_loop(self) -> int:
+        assert self.observability is not None
+        assert self.conversation is not None
         while True:
             try:
                 text = self._read_line(USER_PROMPT)
             except KeyboardInterrupt:
-                self._write("\nEntrada cancelada. Usá /exit para salir.\n")
+                notice = "Entrada cancelada. Usá /exit para salir."
+                self.observability.input_cancelled(notice)
+                self._write(f"\n{notice}\n")
                 continue
             if text is None:
+                self.observability.recorder.audit(
+                    "input.closed",
+                    metadata={"outcome": "session_ended"},
+                )
                 self._write("\nSesión finalizada.\n")
                 return 0
 
-            text = text.strip()
-            if not text:
+            entered_text = text.rstrip("\r\n")
+            normalized = entered_text.strip()
+            if not normalized:
                 continue
             # La barra inicial es la única frontera entre Nox y el modelo.
-            if text.startswith("/"):
-                if self._run_internal_command(text):
+            if normalized.startswith("/"):
+                if self._run_internal_command(
+                    normalized,
+                    transcript_text=entered_text,
+                ):
                     return 0
                 continue
-            self._respond(text)
+            self.conversation.respond(
+                normalized,
+                transcript_text=entered_text,
+            )
 
     def _prepare_provider(self) -> bool:
         assert self.provider is not None
+        assert self.observability is not None
         self._write("\n")
         with TerminalActivity(
             self.output,
@@ -102,217 +166,127 @@ class ReplSession:
             phase="Preparando el modelo local",
         ) as activity:
             try:
-                self.provider.prepare()
+                self.observability.provider_prepare(self.provider.prepare)
             except KeyboardInterrupt:
                 activity.finish(f"{NOX_PROMPT}Preparación cancelada.")
                 self._write("\n")
                 return False
         return True
 
-    def _respond(self, text: str) -> None:
-        if (
-            self.provider is None
-            or self.context is None
-            or self.intent_classifier is None
-        ):
-            error = NoxErrorFactory.create(
-                ErrorCode.MODEL_NOT_CONFIGURED,
-                detail=(
-                    "Usá `nox engines status`, `nox models install <nombre>` "
-                    "y `nox models use <nombre> --scope global`."
-                ),
-            )
-            self._write(f"{error.format_for_cli()}\n")
-            return
-
-        self._write("\n")
-        with TerminalActivity(
-            self.output,
-            prefix=NOX_PROMPT,
-            phase="Entendiendo tu pedido",
-        ) as activity:
-            self._respond_with_activity(text, activity)
-
-    def _respond_with_activity(
+    def _run_internal_command(
         self,
-        text: str,
-        activity: TerminalActivity,
-    ) -> None:
-        assert self.provider is not None
-        assert self.context is not None
-        assert self.intent_classifier is not None
-
-        answer_started = False
-        pending_tokens: list[str] = []
-
-        def show_token(token: str) -> None:
-            nonlocal answer_started
-            if not token:
-                return
-            if not answer_started:
-                pending_tokens.append(token)
-                if not any(part.strip() for part in pending_tokens):
-                    return
-                activity.finish(NOX_PROMPT)
-                answer_started = True
-                self._write_token("".join(pending_tokens))
-                pending_tokens.clear()
-                return
-            self._write_token(token)
-
-        pending_clarifications = list(self.pending_clarifications)
-        if self.pending_request is not None:
-            pending_clarifications.append(text)
-            pending_clarifications = pending_clarifications[
-                -MAX_PENDING_CLARIFICATIONS:
-            ]
-        classified_text = self._classification_text(
-            text,
-            pending_clarifications,
-        )
-        try:
-            decision = self.intent_classifier.classify(
-                classified_text,
-                self.context,
-                history=self.history,
-            )
-        except KeyboardInterrupt:
-            self._finish_interrupted_response(
-                "Respuesta cancelada.",
-                answer_started=False,
-                activity=activity,
-            )
-            return
-        except NoxError as error:
-            self._finish_interrupted_response(
-                error.format_for_cli(),
-                answer_started=False,
-                activity=activity,
-            )
-            return
-
-        if decision.needs_clarification:
-            if self.pending_request is None:
-                self.pending_request = text
-                self.pending_clarifications = []
-            else:
-                self.pending_clarifications = pending_clarifications
-            activity.finish(f"{NOX_PROMPT}{decision.question()}")
-            self._write("\n\n")
-            return
-
-        if self.pending_request is not None:
-            self.pending_clarifications = pending_clarifications
-        self.history.append(ChatMessage("user", classified_text))
-        messages = self._messages_for_response(decision)
-        activity.set_phase("Preparando la respuesta")
-        try:
-            answer = self.provider.chat(messages, on_token=show_token)
-        except KeyboardInterrupt:
-            self.history.pop()
-            self._finish_interrupted_response(
-                "Respuesta cancelada.",
-                answer_started=answer_started,
-                activity=activity,
-            )
-            return
-        except NoxError as error:
-            self.history.pop()
-            self._finish_interrupted_response(
-                error.format_for_cli(),
-                answer_started=answer_started,
-                activity=activity,
-            )
-            return
-        except Exception:
-            self.history.pop()
-            if answer_started:
-                self._write("\n")
-            raise
-        if not answer_started:
-            activity.finish(f"{NOX_PROMPT}{answer}")
-        self.history.append(ChatMessage("assistant", answer))
-        self.pending_request = None
-        self.pending_clarifications = []
-        self._write("\n\n")
-
-    def _messages_for_response(
-        self,
-        decision: IntentDecision,
-    ) -> list[ChatMessage]:
-        messages = list(self.history)
-        if messages and messages[0].role == "system":
-            messages[0] = ChatMessage(
-                "system",
-                f"{messages[0].content}\n\n{decision.response_guidance()}",
-            )
-        return messages
-
-    def _classification_text(
-        self,
-        text: str,
-        clarifications: list[str],
-    ) -> str:
-        if self.pending_request is None:
-            return text
-        sections = [f"Pedido original:\n{self.pending_request}"]
-        sections.extend(
-            f"Aclaración {index}:\n{clarification}"
-            for index, clarification in enumerate(clarifications, start=1)
-        )
-        return "\n\n".join(sections)
-
-    def _finish_interrupted_response(
-        self,
-        message: str,
+        command: str,
         *,
-        answer_started: bool,
-        activity: TerminalActivity,
-    ) -> None:
-        shown = f"{NOX_PROMPT}{message}"
-        if answer_started:
-            self._write(f"\n\n{shown}\n\n")
-        else:
-            activity.finish(shown)
-            self._write("\n\n")
-
-    def _run_internal_command(self, command: str) -> bool:
-        normalized = command.casefold()
-        if normalized in {"/exit", "/salir"}:
-            self._write("Sesión finalizada.\n")
-            return True
-        if normalized in {"/help", "/ayuda"}:
-            self._write(
-                "\n/help o /ayuda       Muestra esta ayuda\n"
-                "/status o /estado    Muestra el contexto activo\n"
-                "/clear o /limpiar    Limpia la conversación actual\n"
-                "/exit o /salir       Termina Nox\n\n"
+        transcript_text: str,
+    ) -> bool:
+        assert self.observability is not None
+        interaction_id = self.observability.begin_internal_command(
+            transcript_text
+        )
+        try:
+            normalized = command.casefold()
+            if normalized in {"/exit", "/salir"}:
+                self._write_internal_response(
+                    interaction_id,
+                    "Sesión finalizada.\n",
+                )
+                return True
+            if normalized in {"/help", "/ayuda"}:
+                self._write_internal_response(
+                    interaction_id,
+                    "\n/help o /ayuda       Muestra esta ayuda\n"
+                    "/status o /estado    Muestra el contexto activo\n"
+                    "/clear o /limpiar    Limpia la conversación actual\n"
+                    "/exit o /salir       Termina Nox\n\n",
+                )
+                return False
+            if normalized in {"/clear", "/limpiar"}:
+                self._reset_history()
+                self._write_internal_response(
+                    interaction_id,
+                    "Conversación limpiada.\n",
+                )
+                return False
+            if normalized in {"/status", "/estado"}:
+                self._write_internal_response(
+                    interaction_id,
+                    self._status_text(),
+                )
+                return False
+            self._write_internal_response(
+                interaction_id,
+                f"Comando desconocido: {command}. Usá /help.\n",
+                outcome="unknown",
             )
             return False
-        if normalized in {"/clear", "/limpiar"}:
-            self._reset_history()
-            self._write("Conversación limpiada.\n")
-            return False
-        if normalized in {"/status", "/estado"}:
-            self._print_status()
-            return False
-        self._write(f"Comando desconocido: {command}. Usá /help.\n")
-        return False
+        except NoxError as error:
+            self.observability.fail_internal_command(
+                interaction_id,
+                str(error.code),
+                error_type=type(error).__name__,
+            )
+            raise
+        except Exception as error:
+            self.observability.fail_internal_command(
+                interaction_id,
+                str(ErrorCode.UNKNOWN_CRITICAL),
+                error_type=type(error).__name__,
+            )
+            raise
+
+    def _write_internal_response(
+        self,
+        interaction_id: str,
+        response: str,
+        *,
+        outcome: str = "completed",
+    ) -> None:
+        assert self.observability is not None
+        self.observability.complete_internal_command(
+            interaction_id,
+            response,
+            outcome=outcome,
+        )
+        self._write(response)
+
+    def _close_observability(
+        self,
+        outcome: str,
+        metadata: dict[str, object],
+    ) -> None:
+        assert self.observability is not None
+        try:
+            self.observability.close(
+                outcome=outcome,
+                metadata=metadata,
+            )
+        except Exception:
+            if outcome == "success":
+                raise
+            LOGGER.exception(
+                "No se pudo cerrar la auditoría de una sesión con resultado %s.",
+                outcome,
+            )
 
     def _reset_history(self) -> None:
         self._reload_context()
+        assert self.provider is not None
         assert self.context is not None
-        self.pending_request = None
-        self.pending_clarifications = []
-        prompt = (
-            "Sos Nox, el agente local del usuario. "
-            "Esta versión carga contexto explícito e identifica intenciones, "
-            "pero todavía no ejecuta herramientas: no afirmes haber inspeccionado "
-            "archivos no incluidos en el contexto, ejecutado comandos ni "
-            "modificado el sistema. Respondé de forma clara.\n\n"
-            f"{self.context.for_model()}"
+        assert self.observability is not None
+        if self.conversation is None:
+            self.conversation = ConversationRuntime(
+                self.provider,
+                self.context,
+                self.observability,
+                self.output,
+            )
+            return
+        self.conversation.reset(
+            self.provider,
+            self.context,
+            self.observability,
+            self.output,
         )
-        self.history = [ChatMessage("system", prompt)]
 
     def _reload_context(self) -> None:
         if self.project is None:
@@ -345,7 +319,7 @@ class ReplSession:
             "Escribí /help para ver los comandos de la sesión.\n\n"
         )
 
-    def _print_status(self) -> None:
+    def _status_text(self) -> str:
         status = StatusService.collect(self.start, nox_version=self.nox_version)
         project = status["project"]
         assert isinstance(project, dict)
@@ -355,7 +329,7 @@ class ReplSession:
             if isinstance(project_context, dict)
             else 0
         )
-        self._write(
+        return (
             f"\nProyecto: {project.get('name')}\n"
             f"Raíz: {project.get('root')}\n"
             f"Contexto: {str(project.get('role')).upper()}\n"
@@ -369,9 +343,6 @@ class ReplSession:
         self._write(prompt)
         line = self.input.readline()
         return None if line == "" else line
-
-    def _write_token(self, token: str) -> None:
-        self._write(token, flush=True)
 
     def _write(self, text: str, *, flush: bool = True) -> None:
         self.output.write(text)

@@ -1,0 +1,11 @@
+schema_version: 1
+environment: development
+flags:
+  audit.enabled: true
+  audit.level: full
+  audit.retention_hours: 24
+  transcription.enabled: true
+  metrics.enabled: true
+  metrics.timings: true
+  logs.enabled: true
+  logs.persistent: true
