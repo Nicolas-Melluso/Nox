@@ -1,5 +1,4 @@
-/nox_agent.egg-info/
+*.egg-info/
 /build/
 /dist/
 /.venv/
-/pyproject.toml
